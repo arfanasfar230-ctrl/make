@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Dapur Ergonomi 3D</title>
+  <link rel="stylesheet" href="/src/css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="loading-screen">
+      <div class="loader-content">
+        <div class="spinner"></div>
+        <p>Memuat simulasi ergonomi dapur...</p>
+        <div id="loading-progress">
+          <div id="loading-bar"></div>
+        </div>
+        <span id="loading-text">0%</span>
+      </div>
+    </div>
+    <div id="mode-selection">
+      <div class="mode-card">
+        <h1>Simulasi Ergonomi Dapur 3D</h1>
+        <p>Pilih mode perangkat Anda</p>
+        <div class="mode-buttons">
+          <button id="btn-desktop" class="mode-btn">
+            <svg viewBox="0 0 24 24" width="48" height="48"><path fill="currentColor" d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/></svg>
+            <span>Desktop</span>
+            <small>Keyboard + Mouse</small>
+          </button>
+          <button id="btn-mobile" class="mode-btn">
+            <svg viewBox="0 0 24 24" width="48" height="48"><path fill="currentColor" d="M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z"/></svg>
+            <span>Mobile</span>
+            <small>Touch Controls</small>
+          </button>
+          <button id="btn-vr" class="mode-btn" style="display:none;">
+            <svg viewBox="0 0 24 24" width="48" height="48"><path fill="currentColor" d="M20.74 6H3.09l1.37 2.74L2 11.5v7c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h16v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-7l-2.46-2.76L20.74 6zM6.5 14c-.83 0-1.5-.67-1.5-1.5S5.67 11 6.5 11s1.5.67 1.5 1.5S7.33 14 6.5 14zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 10l1.5-3h11L19 10H5z"/></svg>
+            <span>VR</span>
+            <small>WebXR Immersive</small>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div id="portrait-overlay" style="display:none;">
+      <div class="portrait-message">
+        <svg viewBox="0 0 24 24" width="64" height="64"><path fill="currentColor" d="M7.34 6.41L.86 12.9l6.49 6.48 6.49-6.48-6.5-6.49zM3.69 12.9l3.66-3.66L11 12.9l-3.66 3.66-3.65-3.66zm15.67-6.26A8.95 8.95 0 0 0 13 4c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61L20.6 6.65z"/></svg>
+        <p>Mohon putar perangkat ke mode landscape untuk pengalaman terbaik</p>
+        <button id="btn-dismiss-portrait">Tutup</button>
+      </div>
+    </div>
+    <canvas id="game-canvas"></canvas>
+    <div id="hud" style="display:none;">
+      <div id="hud-top">
+        <div id="player-info">
+          <span id="player-pos">Posisi: 0, 0, 0</span>
+        </div>
+        <div id="controls-hint">
+          <span>WASD: Gerak | Mouse: Lihat 360&deg; | Klik: Kunci mouse / Pilih objek | Esc: Lepas mouse</span>
+        </div>
+        <div id="sensitivity-wrap" style="display:none;">
+          <label for="sensitivity-slider">Sensitivitas</label>
+          <input id="sensitivity-slider" type="range" min="0.2" max="3" step="0.1" value="1" />
+          <span id="sensitivity-value">1.0x</span>
+        </div>
+      </div>
+      <div id="ergonomics-panel" style="display:none;">
+        <div id="ergo-header">
+          <h3 id="ergo-title">Analisis Ergonomi</h3>
+          <button id="ergo-close">&times;</button>
+        </div>
+        <div id="ergo-score-container">
+          <div id="ergo-score-circle">
+            <svg viewBox="0 0 100 100">
+              <circle cx="50" cy="50" r="45" class="score-bg"/>
+              <circle cx="50" cy="50" r="45" class="score-fill" id="ergo-score-ring"/>
+            </svg>
+            <div id="ergo-score-value">0</div>
+            <div id="ergo-score-label">Skor</div>
+          </div>
+          <div id="ergo-status"></div>
+        </div>
+        <div id="ergo-details"></div>
+        <div id="ergo-recommendations"></div>
+      </div>
+      <div id="interaction-prompt" style="display:none;">
+        <span id="prompt-text">Tekan [E] atau klik untuk menganalisis</span>
+      </div>
+      <div id="interaction-panel" style="display:none;">
+        <div class="interaction-panel-content">
+          <h4 id="interaction-panel-title">Interaksi</h4>
+          <div id="interaction-panel-options"></div>
+        </div>
+      </div>
+      <div id="pointer-lock-hint" style="display:none;">Klik untuk melihat sekeliling</div>
+      <div id="crosshair" aria-hidden="true"><span class="cross-dot"></span></div>
+    </div>
+    <div id="mobile-controls" style="display:none;">
+      <div id="joystick-zone">
+        <div id="joystick-base">
+          <div id="joystick-stick"></div>
+        </div>
+      </div>
+      <div id="mobile-buttons">
+        <button id="btn-mobile-interact" class="mobile-action-btn">E</button>
+      </div>
+      <div id="touch-camera-hint">Geser kiri/kanan untuk lihat</div>
+    </div>
+    <button id="btn-vr-enter" style="display:none;">Masuk VR</button>
+    <button id="btn-toggle-debug" style="display:none;">Debug</button>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
