@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { GameMode, SceneContext, ControlInput, InteractiveObject } from './modules/types';
 import { AssetLoader } from './modules/AssetLoader';
 import { PlayerController } from './modules/PlayerController';
@@ -9,6 +10,7 @@ import { ErgonomicsSystem } from './modules/ErgonomicsSystem';
 import { InteractionSystem, INTERACT_PROMPT } from './modules/InteractionSystem';
 import { VRSystem } from './modules/VRSystem';
 import { DebugSystem } from './modules/DebugSystem';
+import { FridgeInteractionSystem, FridgeState } from './modules/FridgeInteractionSystem';
 
 const GLB_BASE = (() => {
   try {
@@ -32,6 +34,7 @@ class KitchenErgonomicsApp {
   private collision!: CollisionSystem;
   private ergonomics!: ErgonomicsSystem;
   private interaction!: InteractionSystem;
+  private fridgeInteraction!: FridgeInteractionSystem;
   private vrSystem: VRSystem | null = null;
   private debugSystem!: DebugSystem;
 
@@ -262,6 +265,8 @@ kitchenModel: null,
       this.ergonomics = new ErgonomicsSystem(this.ctx);
       this.interaction = new InteractionSystem(this.ctx);
 
+      await this.loadFridge();
+
       this.player = new PlayerController(this.ctx);
       this.debugSystem = new DebugSystem(this.ctx);
 
@@ -339,6 +344,48 @@ kitchenModel: null,
     ]);
   }
 
+  private async loadFridge(): Promise<void> {
+    const fridgeUrl = `${GLB_BASE}kulkas.glb`;
+    const loader = new GLTFLoader();
+    const gltf = await loader.loadAsync(fridgeUrl);
+    const fridgeModel = gltf.scene;
+
+    fridgeModel.traverse((child: THREE.Object3D) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+      }
+    });
+
+    fridgeModel.updateMatrixWorld(true);
+    const bbox = new THREE.Box3().setFromObject(fridgeModel);
+    const size = new THREE.Vector3();
+    bbox.getSize(size);
+
+    const targetHeight = 1.8;
+    const currentHeightM = size.y / this.ctx.sceneScale;
+    const scale = targetHeight / currentHeightM;
+    fridgeModel.scale.setScalar(scale);
+
+    fridgeModel.updateMatrixWorld(true);
+    const scaledBBox = new THREE.Box3().setFromObject(fridgeModel);
+
+    const targetX = 24.29;
+    const targetZ = 31.89;
+    const targetY = this.ctx.floorY - scaledBBox.min.y;
+
+    fridgeModel.position.set(targetX, targetY, targetZ);
+    fridgeModel.name = 'kulkas';
+    fridgeModel.userData.isFridge = true;
+
+    this.ctx.scene.add(fridgeModel);
+    this.ctx.kitchenModel?.add(fridgeModel);
+
+    this.fridgeInteraction = new FridgeInteractionSystem(this.ctx, this.collision);
+    await this.fridgeInteraction.initialize(fridgeModel, gltf.animations);
+  }
+
   private setupReachIndicator(): void {
     if (!this.player) return;
 
@@ -385,15 +432,25 @@ kitchenModel: null,
   private setupInteractionListener(): void {
     const canvas = this.ctx.renderer.domElement as HTMLCanvasElement;
 
-    canvas.addEventListener('click', () => {
-      // The first desktop click captures the mouse for first-person look;
-      // don't also open the ergonomics panel with it.
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+
       if (this.currentMode === 'desktop' && this.desktopControls && !this.desktopControls.isLocked()) {
         return;
       }
-      // Touch taps (mobile) and VR clicks don't set pendingInteract, so toggle
-      // the faucet directly here. Desktop pointer-locked clicks toggle exactly
-      // once via input.interact in the render loop instead.
+
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const mouseY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+      if (this.fridgeInteraction) {
+        this.fridgeInteraction.setMouse(mouseX, mouseY);
+        if (this.fridgeInteraction.onMouseDown(e)) {
+          e.stopPropagation();
+          return;
+        }
+      }
+
       if (this.currentMode !== 'desktop' && this.interaction?.getHover()) {
         this.showInteractionPanel();
       }
@@ -402,13 +459,43 @@ kitchenModel: null,
       }
     });
 
+    canvas.addEventListener('mouseup', (e) => {
+      if (e.button !== 0) return;
+      if (this.fridgeInteraction) {
+        this.fridgeInteraction.onMouseUp();
+      }
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const mouseY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      if (this.fridgeInteraction) {
+        this.fridgeInteraction.setMouse(mouseX, mouseY);
+      }
+    });
+
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Escape') {
         this.hideErgonomics();
         this.hideInteractionPanel();
+        if (this.fridgeInteraction) {
+          this.fridgeInteraction.hideInteractionMenu();
+        }
       }
-      if (e.code === 'KeyF' && this.interaction?.getHover()) {
-        this.showInteractionPanel();
+
+      if (this.fridgeInteraction && this.fridgeInteraction.getState() !== FridgeState.IDLE) {
+        if (this.fridgeInteraction.onKeyDown(e.code)) {
+          return;
+        }
+      }
+
+      if (e.code === 'KeyF') {
+        if (this.fridgeInteraction && this.fridgeInteraction.isFridgeHovered()) {
+          this.fridgeInteraction.showInteractionMenu();
+        } else if (this.interaction?.getHover()) {
+          this.showInteractionPanel();
+        }
       }
     });
 
@@ -591,32 +678,43 @@ kitchenModel: null,
       return this.collision.resolvePosition(pos, radius, this.player.getHeight());
     });
 
+    if (this.fridgeInteraction) {
+      this.fridgeInteraction.update(delta);
+    }
+
     if (this.showReachIndicator) {
       this.updateReachIndicator();
     }
 
-    const nearest = this.ergonomics.findNearestObject(this.player.getPosition());
-    if (nearest) {
-      this.promptText.textContent = `${nearest.displayName} - Tekan [E] atau klik untuk menganalisis`;
-      this.interactionPrompt.style.display = 'block';
+    const fridgeHovered = this.fridgeInteraction?.isFridgeHovered() ?? false;
+    const fridgeState = this.fridgeInteraction?.getState() ?? FridgeState.IDLE;
 
-      if (input.interact) {
-        this.showErgonomics(nearest);
+    if (!fridgeHovered && fridgeState === FridgeState.IDLE) {
+      const nearest = this.ergonomics.findNearestObject(this.player.getPosition(), ['fridge']);
+      if (nearest) {
+        this.promptText.textContent = `${nearest.displayName} - Tekan [E] atau klik untuk menganalisis`;
+        this.interactionPrompt.style.display = 'block';
+
+        if (input.interact) {
+          this.showErgonomics(nearest);
+        }
+      } else {
+        this.interactionPrompt.style.display = 'none';
+      }
+
+      // Crosshair-driven interaction wins over the proximity prompt.
+      const hover = this.interaction.update(delta);
+      if (hover) {
+        const label = this.interaction.getHoverLabel?.() ?? INTERACT_PROMPT;
+        this.promptText.textContent = label;
+        this.interactionPrompt.style.display = 'block';
+
+        if (input.interact) {
+          this.showInteractionPanel();
+        }
       }
     } else {
-      this.interactionPrompt.style.display = 'none';
-    }
-
-    // Crosshair-driven interaction wins over the proximity prompt.
-    const hover = this.interaction.update(delta);
-    if (hover) {
-      const label = this.interaction.getHoverLabel?.() ?? INTERACT_PROMPT;
-      this.promptText.textContent = label;
-      this.interactionPrompt.style.display = 'block';
-
-      if (input.interact) {
-        this.showInteractionPanel();
-      }
+      this.interaction.update(delta);
     }
 
     this.playerPosEl.textContent = `Pos: ${this.player.state.position.x.toFixed(2)}, ${this.player.state.position.y.toFixed(2)}, ${this.player.state.position.z.toFixed(2)}`;

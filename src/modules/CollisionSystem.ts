@@ -255,6 +255,17 @@ export class CollisionSystem {
     return this.collisionBoxes;
   }
 
+  public addCollisionBox(box: CollisionBox): void {
+    this.collisionBoxes.push(box);
+  }
+
+  public removeCollisionBox(box: CollisionBox): void {
+    const idx = this.collisionBoxes.indexOf(box);
+    if (idx !== -1) {
+      this.collisionBoxes.splice(idx, 1);
+    }
+  }
+
   public getBoundary(): { min: THREE.Vector3; max: THREE.Vector3 } {
     return { min: this.boundaryMin, max: this.boundaryMax };
   }

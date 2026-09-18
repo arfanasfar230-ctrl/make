@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import type { SceneContext, ControlInput, PlayerState } from './types';
 
-const PLAYER_HEIGHT_M = 1.7;
-const PLAYER_RADIUS_M = 0.25;
-const PLAYER_EYE_RATIO = 0.94;
+const PLAYER_HEIGHT_M = 1.8;
+const PLAYER_RADIUS_M = 0.27;
+const PLAYER_EYE_RATIO = 0.92;
 const PLAYER_SPEED_MPS = 3.5;
 /** Radians of yaw/pitch per mouse pixel at sensitivity 1. */
 const LOOK_SENSITIVITY = 0.002;

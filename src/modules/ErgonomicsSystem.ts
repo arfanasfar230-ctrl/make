@@ -75,12 +75,13 @@ export class ErgonomicsSystem {
     return ERGONOMIC_RANGES[category] || ERGONOMIC_RANGES.other;
   }
 
-  public findNearestObject(playerPos: THREE.Vector3): InteractiveObject | null {
+  public findNearestObject(playerPos: THREE.Vector3, excludeCategories: string[] = []): InteractiveObject | null {
     let nearest: InteractiveObject | null = null;
     let nearestDist = Infinity;
     const range = INTERACTION_RANGE_M * this.modelUnitsPerMeter;
 
     for (const obj of this.ctx.interactiveObjects) {
+      if (excludeCategories.includes(obj.category)) continue;
       const dist = this.distanceToObjectXY(playerPos, obj);
       if (dist < nearestDist && dist < range) {
         nearestDist = dist;
