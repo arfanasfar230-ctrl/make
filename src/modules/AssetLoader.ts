@@ -32,7 +32,7 @@ const GROUP_CATEGORY: Record<string, KitchenObjectCategory | 'skip'> = {
   G_3_extern_wall: 'skip',
   interiors: 'skip',
   G_1: 'cabinet',      // tall wall cabinet on the west wall
-  G_2: 'fridge',       // refrigerator on the east wall
+  G_2: 'skip',         // exterior wall door on the east wall (replaced by dedicated 3D Refrigerator model)
   G_7: 'counter',
   G_8: 'counter',
   G_9: 'counter',

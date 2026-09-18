@@ -147,6 +147,7 @@ export class CollisionSystem {
     for (let i = 0; i < 6; i++) {
       let collided = false;
       for (const box of this.collisionBoxes) {
+        if (box.disabled) continue;
         if (this.intersectsCapsule(result, radius, fullHeight, box)) {
           this.pushOut(result, radius, box);
           result.x = THREE.MathUtils.clamp(result.x, this.boundaryMin.x + radius, this.boundaryMax.x - radius);
@@ -272,5 +273,35 @@ export class CollisionSystem {
 
   public setDebugVisibility(_visible: boolean): void {
     // Debug visualization handled by DebugSystem.
+  }
+
+  public setObjectCollisionEnabled(targetRoot: THREE.Object3D, enabled: boolean): void {
+    for (const box of this.collisionBoxes) {
+      if (box.object3D && this.isNodeOrDescendant(box.object3D, targetRoot)) {
+        box.disabled = !enabled;
+      }
+    }
+  }
+
+  public updateObjectCollision(targetRoot: THREE.Object3D): void {
+    targetRoot.updateMatrixWorld(true);
+    for (const box of this.collisionBoxes) {
+      if (box.object3D && this.isNodeOrDescendant(box.object3D, targetRoot)) {
+        const updated = new THREE.Box3().setFromObject(box.object3D);
+        box.min.copy(updated.min);
+        box.max.copy(updated.max);
+        box.disabled = false;
+      }
+    }
+  }
+
+  private isNodeOrDescendant(node: THREE.Object3D, root: THREE.Object3D): boolean {
+    if (node === root) return true;
+    let curr: THREE.Object3D | null = node.parent;
+    while (curr) {
+      if (curr === root) return true;
+      curr = curr.parent;
+    }
+    return false;
   }
 }

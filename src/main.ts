@@ -11,6 +11,7 @@ import { InteractionSystem, INTERACT_PROMPT } from './modules/InteractionSystem'
 import { VRSystem } from './modules/VRSystem';
 import { DebugSystem } from './modules/DebugSystem';
 import { FridgeInteractionSystem, FridgeState } from './modules/FridgeInteractionSystem';
+import { FurnitureMoveSystem } from './modules/FurnitureMoveSystem';
 
 const GLB_BASE = (() => {
   try {
@@ -37,11 +38,13 @@ class KitchenErgonomicsApp {
   private fridgeInteraction!: FridgeInteractionSystem;
   private vrSystem: VRSystem | null = null;
   private debugSystem!: DebugSystem;
+  private furnitureMove!: FurnitureMoveSystem;
 
   private currentMode: GameMode = 'desktop';
   private isRunning = false;
   private highlightedObject: InteractiveObject | null = null;
-  private originalMaterials: Map<THREE.Object3D, THREE.Material | THREE.Material[]> = new Map();
+  // Ergonomics highlight: yellow outline Box3Helper (replaces pink material-swap)
+  private ergoHighlightHelper: THREE.Box3Helper | null = null;
 
   private loadingScreen: HTMLElement;
   private loadingBar: HTMLElement;
@@ -70,6 +73,16 @@ class KitchenErgonomicsApp {
   private reachGroup: THREE.Group | null = null;
   private showReachIndicator = true;
   private colliderHelper: THREE.Mesh | null = null;
+  private moveModeHud!: HTMLElement;
+  private moveModeObjTitle!: HTMLElement;
+  private moveToast!: HTMLElement;
+  private moveToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Faint blue hitbox highlight
+  private hitboxHelper: THREE.Box3Helper | null = null;
+  private hitboxTargetObj: InteractiveObject | null = null;
+  private hitboxRaycaster: THREE.Raycaster = new THREE.Raycaster();
+  private hitboxScreenCenter: THREE.Vector2 = new THREE.Vector2(0, 0);
 
   constructor() {
     this.clock = new THREE.Clock();
@@ -98,6 +111,9 @@ class KitchenErgonomicsApp {
     this.sensitivityWrap = document.getElementById('sensitivity-wrap')!;
     this.sensitivitySlider = document.getElementById('sensitivity-slider') as HTMLInputElement;
     this.sensitivityValue = document.getElementById('sensitivity-value')!;
+    this.moveModeHud = document.getElementById('move-mode-hud')!;
+    this.moveModeObjTitle = document.getElementById('move-obj-title')!;
+    this.moveToast = document.getElementById('move-toast')!;
 
     this.setupRenderer();
     this.setupModeSelection();
@@ -270,6 +286,27 @@ kitchenModel: null,
       this.player = new PlayerController(this.ctx);
       this.debugSystem = new DebugSystem(this.ctx);
 
+      this.furnitureMove = new FurnitureMoveSystem(this.ctx, this.collision, {
+        onStartMove: (obj) => {
+          this.moveModeObjTitle.textContent = obj.displayName;
+          this.moveModeHud.style.display = 'block';
+          this.hideErgonomics();
+          this.hideInteractionPanel();
+          this.showToast(`📦 Memindahkan ${obj.displayName} — Arahkan kursor, scroll/Q/E untuk putar, klik/Space untuk letakkan`);
+          if (this.mobileControls) this.mobileControls.setMoveMode(true);
+        },
+        onPlaced: (obj) => {
+          this.moveModeHud.style.display = 'none';
+          this.showToast(`✅ ${obj.displayName} berhasil dipindahkan`);
+          if (this.mobileControls) this.mobileControls.setMoveMode(false);
+        },
+        onCancelled: (obj) => {
+          this.moveModeHud.style.display = 'none';
+          this.showToast(`↩️ Pemindahan ${obj.displayName} dibatalkan`);
+          if (this.mobileControls) this.mobileControls.setMoveMode(false);
+        },
+      });
+
       // Verify spawn is valid (not inside furniture, not outside room)
       const safeSpawn = this.collision.resolvePosition(
         this.player.getPosition(),
@@ -287,7 +324,13 @@ kitchenModel: null,
       if (mode === 'desktop') {
         this.desktopControls = new DesktopControls(
           this.ctx.renderer.domElement as HTMLCanvasElement,
-          (locked) => this.updatePointerLockHint(locked)
+          (locked) => {
+            this.updatePointerLockHint(locked);
+            // Tell fridge system about pointer lock so it uses crosshair
+            if (this.fridgeInteraction) {
+              this.fridgeInteraction.setPointerLocked(locked);
+            }
+          }
         );
         this.player.setLookSensitivity(Number(this.sensitivitySlider.value));
         this.sensitivityWrap.style.display = 'flex';
@@ -320,6 +363,7 @@ kitchenModel: null,
       }
 
       this.setupInteractionListener();
+      this.setupErgoMoveButton();
 
       this.loadingScreen.style.display = 'none';
       this.isRunning = true;
@@ -379,11 +423,37 @@ kitchenModel: null,
     fridgeModel.name = 'kulkas';
     fridgeModel.userData.isFridge = true;
 
-    this.ctx.scene.add(fridgeModel);
-    this.ctx.kitchenModel?.add(fridgeModel);
+    if (this.ctx.kitchenModel) {
+      this.ctx.kitchenModel.add(fridgeModel);
+    } else {
+      this.ctx.scene.add(fridgeModel);
+    }
+
+    const finalBox = new THREE.Box3().setFromObject(fridgeModel);
+    const finalCenter = new THREE.Vector3();
+    finalBox.getCenter(finalCenter);
+    const finalSize = new THREE.Vector3();
+    finalBox.getSize(finalSize);
+
+    this.ctx.interactiveObjects.push({
+      name: 'kulkas',
+      displayName: 'Kulkas',
+      category: 'fridge',
+      object3D: fridgeModel,
+      boundingBox: finalBox.clone(),
+      center: finalCenter.clone(),
+      height: finalSize.y,
+      surfaceY: finalBox.max.y,
+    });
 
     this.fridgeInteraction = new FridgeInteractionSystem(this.ctx, this.collision);
     await this.fridgeInteraction.initialize(fridgeModel, gltf.animations);
+    this.fridgeInteraction.onMoveRequested = () => {
+      const fridgeObj = this.ctx.interactiveObjects.find((o) => o.name === 'kulkas');
+      if (fridgeObj && this.furnitureMove) {
+        this.furnitureMove.startMoving(fridgeObj);
+      }
+    };
   }
 
   private setupReachIndicator(): void {
@@ -491,16 +561,189 @@ kitchenModel: null,
       }
 
       if (e.code === 'KeyF') {
-        if (this.fridgeInteraction && this.fridgeInteraction.isFridgeHovered()) {
-          this.fridgeInteraction.showInteractionMenu();
+        // Check if player is gazing at the fridge (via hitbox raycast) OR fridge is hovered
+        const gazingAtFridge =
+          (this.hitboxTargetObj?.name === 'kulkas') ||
+          (this.fridgeInteraction?.isFridgeHovered());
+
+        if (this.fridgeInteraction && gazingAtFridge) {
+          // Directly toggle fridge door — no ESC / cursor needed
+          this.fridgeInteraction.toggleFridgeDoor();
         } else if (this.interaction?.getHover()) {
           this.showInteractionPanel();
+        }
+      }
+      // [G] key — toggle furniture move mode for nearest object
+      if (e.code === 'KeyG' && this.furnitureMove) {
+        if (this.furnitureMove.isMoving()) {
+          this.furnitureMove.cancel();
+        } else {
+          this.tryStartFurnitureMove();
         }
       }
     });
 
     const ergoClose = document.getElementById('ergo-close')!;
     ergoClose.addEventListener('click', () => this.hideErgonomics());
+  }
+
+  /** Wire up the "Pindah & Putar" button inside the ergonomics panel. */
+  private setupErgoMoveButton(): void {
+    const btn = document.getElementById('btn-ergo-move');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      const obj = this.highlightedObject;
+      this.hideErgonomics();
+      if (obj && this.furnitureMove) {
+        this.furnitureMove.startMoving(obj);
+      }
+    });
+  }
+
+  /** Try to start moving the object the player is LOOKING AT (crosshair raycast first, proximity fallback). */
+  private tryStartFurnitureMove(): void {
+    if (!this.furnitureMove || this.furnitureMove.isMoving()) return;
+
+    // Use the hitbox-targeted object if we already computed it this frame
+    const target = this.hitboxTargetObj;
+    if (target) {
+      this.furnitureMove.startMoving(target);
+      return;
+    }
+
+    // Fallback: pick the object closest to the player within a short range
+    const playerPos = this.player.getPosition();
+    const scale = this.ctx.sceneScale;
+    const maxDist = 3.5 * scale;
+    let closest: InteractiveObject | null = null;
+    let closestDist = Infinity;
+    for (const obj of this.ctx.interactiveObjects) {
+      const d = playerPos.distanceTo(obj.center);
+      if (d < maxDist && d < closestDist) {
+        closestDist = d;
+        closest = obj;
+      }
+    }
+    if (closest) {
+      this.furnitureMove.startMoving(closest);
+    } else {
+      this.showToast('⚠️ Arahkan pandangan ke barang yang ingin dipindahkan');
+    }
+  }
+
+  /**
+   * Raycast from camera centre to find which interactive object the player is
+   * looking at, then show / hide the faint blue hitbox helper accordingly.
+   */
+  private updateHitboxHelper(): void {
+    if (this.furnitureMove?.isMoving()) {
+      // Hide during active move
+      if (this.hitboxHelper) this.hitboxHelper.visible = false;
+      this.hitboxTargetObj = null;
+      return;
+    }
+
+    const scale = Math.max(this.ctx.sceneScale, 1e-6);
+    // Collect all mesh objects from interactive objects for raycasting
+    const candidateMeshes: THREE.Object3D[] = [];
+    for (const obj of this.ctx.interactiveObjects) {
+      obj.object3D.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) candidateMeshes.push(child);
+      });
+    }
+
+    this.hitboxRaycaster.setFromCamera(this.hitboxScreenCenter, this.ctx.camera);
+    this.hitboxRaycaster.far = 4.5 * scale;
+
+    let targeted: InteractiveObject | null = null;
+
+    if (candidateMeshes.length > 0) {
+      const hits = this.hitboxRaycaster.intersectObjects(candidateMeshes, false);
+      if (hits.length > 0) {
+        // Walk up to find which InteractiveObject this mesh belongs to
+        outer: for (const hit of hits) {
+          let node: THREE.Object3D | null = hit.object;
+          while (node) {
+            for (const obj of this.ctx.interactiveObjects) {
+              if (obj.object3D === node || obj.object3D.getObjectById(node.id)) {
+                targeted = obj;
+                break outer;
+              }
+            }
+            node = node.parent;
+          }
+        }
+      }
+    }
+
+    // If raycast missed, check if any object is very close AND in front of camera
+    if (!targeted) {
+      const playerPos = this.player.getPosition();
+      const forward = new THREE.Vector3();
+      this.ctx.camera.getWorldDirection(forward);
+      forward.y = 0;
+      forward.normalize();
+
+      const closeRange = 2.2 * scale;
+      let bestDot = 0.6; // must be looking roughly at it (within ~53°)
+      for (const obj of this.ctx.interactiveObjects) {
+        const toObj = new THREE.Vector3().subVectors(obj.center, playerPos);
+        const dist = toObj.length();
+        if (dist > closeRange) continue;
+        toObj.y = 0;
+        toObj.normalize();
+        const dot = toObj.dot(forward);
+        if (dot > bestDot) {
+          bestDot = dot;
+          targeted = obj;
+        }
+      }
+    }
+
+    this.hitboxTargetObj = targeted;
+
+    if (targeted) {
+      // Build a tight bounding box around the object (with tiny padding)
+      targeted.object3D.updateMatrixWorld(true);
+      const tightBox = new THREE.Box3().setFromObject(targeted.object3D);
+      // Very small padding (5 cm in world units) so it's snug
+      const pad = 0.05 * scale;
+      tightBox.expandByScalar(pad);
+
+      if (!this.hitboxHelper) {
+        this.hitboxHelper = new THREE.Box3Helper(tightBox, new THREE.Color(0x38bdf8));
+        // Make the lines semi-transparent blue
+        const mat = this.hitboxHelper.material as THREE.LineBasicMaterial;
+        mat.transparent = true;
+        mat.opacity = 0.45;
+        mat.depthWrite = false;
+        mat.linewidth = 1;
+        this.ctx.scene.add(this.hitboxHelper);
+      } else {
+        this.hitboxHelper.box.copy(tightBox);
+      }
+      this.hitboxHelper.visible = true;
+    } else {
+      if (this.hitboxHelper) this.hitboxHelper.visible = false;
+    }
+  }
+
+  private showToast(message: string): void {
+    if (this.moveToastTimer !== null) {
+      clearTimeout(this.moveToastTimer);
+      this.moveToastTimer = null;
+    }
+    this.moveToast.textContent = message;
+    this.moveToast.style.display = 'block';
+    this.moveToast.classList.remove('toast-fade');
+    // Force reflow to restart CSS transition
+    void this.moveToast.offsetWidth;
+    this.moveToast.classList.add('toast-fade');
+    this.moveToastTimer = setTimeout(() => {
+      this.moveToast.style.display = 'none';
+      this.moveToast.classList.remove('toast-fade');
+      this.moveToastTimer = null;
+    }, 3500);
   }
 
   private showInteractionPanel(): void {
@@ -615,31 +858,31 @@ kitchenModel: null,
     this.unhighlightAll();
     this.highlightedObject = obj;
 
-    obj.object3D.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        this.originalMaterials.set(child, child.material);
-        child.material = new THREE.MeshBasicMaterial({
-          color: 0xe94560,
-          transparent: true,
-          opacity: 0.3,
-          wireframe: false,
-          depthWrite: false,
-        });
-      }
-    });
+    // Use a yellow Box3Helper outline — no material swapping
+    obj.object3D.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(obj.object3D);
+    const pad = 0.04 * Math.max(this.ctx.sceneScale, 1e-6);
+    box.expandByScalar(pad);
+
+    if (!this.ergoHighlightHelper) {
+      this.ergoHighlightHelper = new THREE.Box3Helper(box, new THREE.Color(0xffd700));
+      const mat = this.ergoHighlightHelper.material as THREE.LineBasicMaterial;
+      mat.transparent = true;
+      mat.opacity = 0.7;
+      mat.depthWrite = false;
+      this.ctx.scene.add(this.ergoHighlightHelper);
+    } else {
+      this.ergoHighlightHelper.box.copy(box);
+    }
+    this.ergoHighlightHelper.visible = true;
   }
 
   private unhighlightAll(): void {
     if (this.highlightedObject) {
-      this.highlightedObject.object3D.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          const orig = this.originalMaterials.get(child);
-          if (orig) {
-            child.material = orig;
-            this.originalMaterials.delete(child);
-          }
-        }
-      });
+      // Just hide the helper — no materials to restore
+      if (this.ergoHighlightHelper) {
+        this.ergoHighlightHelper.visible = false;
+      }
       this.highlightedObject = null;
     }
   }
@@ -674,6 +917,39 @@ kitchenModel: null,
       input = { moveForward: 0, moveRight: 0, lookX: 0, lookY: 0, interact: false };
     }
 
+    // --- Furniture Move System ---
+    if (this.furnitureMove) {
+      if (this.furnitureMove.isMoving()) {
+        // While in move mode: pass all rotation / place / cancel inputs to the move system.
+        // Suppress normal player interaction so [E] doesn't also fire ergonomics.
+        this.furnitureMove.update(delta, input);
+
+        // Show mobile move button hint visibility
+        if (this.mobileControls) {
+          this.mobileControls.showMoveButton(false);
+        }
+
+        // Still allow player walking (WASD) while repositioning
+        this.player.update(input, delta, (pos, radius) => {
+          return this.collision.resolvePosition(pos, radius, this.player.getHeight());
+        });
+
+        if (this.showReachIndicator) this.updateReachIndicator();
+        this.playerPosEl.textContent = `Pos: ${this.player.state.position.x.toFixed(2)}, ${this.player.state.position.y.toFixed(2)}, ${this.player.state.position.z.toFixed(2)}`;
+        this.renderer.render(this.scene, this.camera);
+        return;
+      }
+
+      // Not in move mode: check for moveToggle input ([G] key / mobile move button)
+      if (input.moveToggle) {
+        this.tryStartFurnitureMove();
+      }
+    }
+
+    // Update faint blue hitbox highlight every frame
+    this.updateHitboxHelper();
+    // --- End Furniture Move System ---
+
     this.player.update(input, delta, (pos, radius) => {
       return this.collision.resolvePosition(pos, radius, this.player.getHeight());
     });
@@ -686,35 +962,38 @@ kitchenModel: null,
       this.updateReachIndicator();
     }
 
-    const fridgeHovered = this.fridgeInteraction?.isFridgeHovered() ?? false;
-    const fridgeState = this.fridgeInteraction?.getState() ?? FridgeState.IDLE;
-
-    if (!fridgeHovered && fridgeState === FridgeState.IDLE) {
-      const nearest = this.ergonomics.findNearestObject(this.player.getPosition(), ['fridge']);
-      if (nearest) {
-        this.promptText.textContent = `${nearest.displayName} - Tekan [E] atau klik untuk menganalisis`;
-        this.interactionPrompt.style.display = 'block';
-
-        if (input.interact) {
-          this.showErgonomics(nearest);
-        }
+    // Show prompt based on hitbox-targeted object (what player is LOOKING at) rather than just proximity
+    const gazed = this.hitboxTargetObj;
+    const nearest = gazed ?? this.ergonomics.findNearestObject(this.player.getPosition());
+    if (nearest) {
+      if (nearest.category === 'fridge') {
+        this.promptText.textContent = `${nearest.displayName} — [E] Analisis | [F] Menu | [G] Pindah & Putar`;
       } else {
-        this.interactionPrompt.style.display = 'none';
+        this.promptText.textContent = `${nearest.displayName} — [E] Analisis | [G] Pindah & Putar`;
       }
+      this.interactionPrompt.style.display = 'block';
 
-      // Crosshair-driven interaction wins over the proximity prompt.
-      const hover = this.interaction.update(delta);
-      if (hover) {
-        const label = this.interaction.getHoverLabel?.() ?? INTERACT_PROMPT;
-        this.promptText.textContent = label;
-        this.interactionPrompt.style.display = 'block';
+      // Show the mobile move button only when near a moveable object
+      if (this.mobileControls) this.mobileControls.showMoveButton(true);
 
-        if (input.interact) {
-          this.showInteractionPanel();
-        }
+      if (input.interact) {
+        this.showErgonomics(nearest);
       }
     } else {
-      this.interaction.update(delta);
+      this.interactionPrompt.style.display = 'none';
+      if (this.mobileControls) this.mobileControls.showMoveButton(false);
+    }
+
+    // Crosshair-driven interaction wins over the proximity prompt.
+    const hover = this.interaction.update(delta);
+    if (hover) {
+      const label = this.interaction.getHoverLabel?.() ?? INTERACT_PROMPT;
+      this.promptText.textContent = label;
+      this.interactionPrompt.style.display = 'block';
+
+      if (input.interact) {
+        this.showInteractionPanel();
+      }
     }
 
     this.playerPosEl.textContent = `Pos: ${this.player.state.position.x.toFixed(2)}, ${this.player.state.position.y.toFixed(2)}, ${this.player.state.position.z.toFixed(2)}`;

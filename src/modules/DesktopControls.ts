@@ -18,6 +18,11 @@ export class DesktopControls {
   private isPointerLocked: boolean = false;
   private lockSupported: boolean;
   private pendingInteract: boolean = false;
+  private pendingMoveToggle: boolean = false;
+  private pendingRotateSnap: boolean = false;
+  private pendingPlace: boolean = false;
+  private pendingCancel: boolean = false;
+  private rotateWheelDelta: number = 0;
   private lookX: number = 0;
   private lookY: number = 0;
 
@@ -40,8 +45,21 @@ export class DesktopControls {
     window.addEventListener('keydown', (e) => {
       this.keys.add(e.code);
 
-      if (e.code === 'KeyE' || e.code === 'Space') {
+      if (e.code === 'KeyE') {
         this.pendingInteract = true;
+      }
+      if (e.code === 'Space' || e.code === 'Enter') {
+        this.pendingInteract = true;
+        this.pendingPlace = true;
+      }
+      if (e.code === 'KeyG') {
+        this.pendingMoveToggle = true;
+      }
+      if (e.code === 'KeyR') {
+        this.pendingRotateSnap = true;
+      }
+      if (e.code === 'Escape') {
+        this.pendingCancel = true;
       }
     });
 
@@ -51,6 +69,15 @@ export class DesktopControls {
   }
 
   private setupMouse(): void {
+    this.canvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+    });
+
+    window.addEventListener('wheel', (e) => {
+      // deltaY > 0 is scroll down, deltaY < 0 is scroll up
+      this.rotateWheelDelta += (e.deltaY > 0 ? 1 : -1) * 35;
+    }, { passive: true });
+
     if (this.lockSupported) {
       document.addEventListener('pointerlockchange', () => {
         this.isPointerLocked = document.pointerLockElement === this.canvas;
@@ -68,13 +95,19 @@ export class DesktopControls {
 
       document.addEventListener('mousemove', (e) => {
         if (!this.isPointerLocked) return;
+        // If holding right mouse button, rotate the object instead of turning camera
+        if (e.buttons === 2) {
+          this.rotateWheelDelta += e.movementX * 12;
+          return;
+        }
         this.lookX += e.movementX;
         this.lookY += e.movementY;
       });
 
-      this.canvas.addEventListener('click', () => {
+      this.canvas.addEventListener('click', (e) => {
         if (this.isPointerLocked) {
           this.pendingInteract = true;
+          this.pendingPlace = true;
         } else {
           this.tryRequestPointerLock();
         }
@@ -83,6 +116,7 @@ export class DesktopControls {
       // No Pointer Lock API: drag to look, click does not lock.
       this.canvas.addEventListener('click', () => {
         this.pendingInteract = true;
+        this.pendingPlace = true;
       });
 
       document.addEventListener('mousedown', (e) => {
@@ -92,6 +126,11 @@ export class DesktopControls {
 
       document.addEventListener('mousemove', (e) => {
         if (!this.dragActive) return;
+        if (e.buttons === 2) {
+          this.rotateWheelDelta += (e.clientX - this.lastDrag.x) * 12;
+          this.lastDrag = { x: e.clientX, y: e.clientY };
+          return;
+        }
         this.lookX += e.clientX - this.lastDrag.x;
         this.lookY += e.clientY - this.lastDrag.y;
         this.lastDrag = { x: e.clientX, y: e.clientY };
@@ -119,17 +158,32 @@ export class DesktopControls {
   }
 
   public getInput(): ControlInput {
+    let rotateInput = 0;
+    if (this.keys.has('KeyQ')) rotateInput -= 1;
+    if (this.keys.has('KeyE')) rotateInput += 1;
+
     const input: ControlInput = {
       moveForward: 0,
       moveRight: 0,
       lookX: this.lookX,
       lookY: this.lookY,
       interact: this.pendingInteract,
+      rotateInput,
+      rotateWheelDelta: this.rotateWheelDelta,
+      rotateSnap: this.pendingRotateSnap,
+      moveToggle: this.pendingMoveToggle,
+      placeItem: this.pendingPlace,
+      cancelMove: this.pendingCancel,
     };
 
     this.lookX = 0;
     this.lookY = 0;
     this.pendingInteract = false;
+    this.pendingMoveToggle = false;
+    this.pendingRotateSnap = false;
+    this.pendingPlace = false;
+    this.pendingCancel = false;
+    this.rotateWheelDelta = 0;
 
     if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) input.moveForward += 1;
     if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) input.moveForward -= 1;

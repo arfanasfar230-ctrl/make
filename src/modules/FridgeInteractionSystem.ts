@@ -34,6 +34,8 @@ export class FridgeInteractionSystem {
   private promptText: HTMLElement | null = null;
   private interactionPrompt: HTMLElement | null = null;
   private fridgeHovered = false;
+  // Track pointer lock state so we always use crosshair (0,0) in FPS mode
+  private pointerLocked = false;
 
   constructor(ctx: SceneContext, collision: CollisionSystem) {
     this.ctx = ctx;
@@ -103,11 +105,6 @@ export class FridgeInteractionSystem {
     }
 
     this.updateCollider();
-
-    if (this.state === FridgeState.MOVE && this.isDragging) {
-      this.handleMove();
-    }
-
     this.checkHover();
   }
 
@@ -120,10 +117,19 @@ export class FridgeInteractionSystem {
     this.fridgeCollider.max.copy(bbox.max);
   }
 
-  private checkHover(): void {
-    if (!this.fridgeModel || this.state === FridgeState.MOVE || this.state === FridgeState.INTERACTION_MENU) return;
+  public onMoveRequested?: () => void;
+  private isOpen = false;
 
-    this.raycaster.setFromCamera(this.mouse, this.ctx.camera);
+  private checkHover(): void {
+    if (!this.fridgeModel || this.state === FridgeState.INTERACTION_MENU) return;
+
+    // In FPS/pointer-lock mode, ALWAYS use crosshair (center) for detection.
+    // Only use actual mouse position when cursor is free (e.g. mobile or unlocked).
+    const castFrom = this.pointerLocked
+      ? new THREE.Vector2(0, 0)
+      : this.mouse;
+
+    this.raycaster.setFromCamera(castFrom, this.ctx.camera);
     this.raycaster.far = this.INTERACTION_DISTANCE * Math.max(this.ctx.sceneScale, 1e-6);
 
     const hits = this.raycaster.intersectObject(this.fridgeModel, true);
@@ -132,7 +138,7 @@ export class FridgeInteractionSystem {
     this.fridgeHovered = isHovered;
 
     if (isHovered && this.state === FridgeState.IDLE) {
-      this.showPrompt('F - Buka Kulkas | Klik - Pindahkan | Q/E - Rotasi');
+      this.showPrompt('Kulkas — [F] Buka/Tutup Pintu | [G] Pindah & Putar | [E] Analisis');
     } else if (!isHovered && this.state === FridgeState.IDLE) {
       this.hidePrompt();
     }
@@ -142,18 +148,17 @@ export class FridgeInteractionSystem {
     this.mouse.set(x, y);
   }
 
-  public onMouseDown(event: MouseEvent): boolean {
-    if (!this.fridgeModel || this.state !== FridgeState.IDLE) return false;
-
-    this.raycaster.setFromCamera(this.mouse, this.ctx.camera);
-    const hits = this.raycaster.intersectObject(this.fridgeModel, true);
-
-    if (hits.length > 0) {
-      this.state = FridgeState.MOVE;
-      this.isDragging = true;
-      this.startDrag(hits[0].point);
-      return true;
+  /** Call this from main.ts whenever pointer lock state changes. */
+  public setPointerLocked(locked: boolean): void {
+    this.pointerLocked = locked;
+    if (locked) {
+      // Always use crosshair center when pointer is locked
+      this.mouse.set(0, 0);
     }
+  }
+
+  public onMouseDown(_event: MouseEvent): boolean {
+    // Movement & rotation are handled cleanly by FurnitureMoveSystem ([G] / UI button)
     return false;
   }
 
@@ -165,40 +170,12 @@ export class FridgeInteractionSystem {
     }
   }
 
-  private startDrag(hitPoint: THREE.Vector3): void {
-    if (!this.fridgeModel) return;
-
-    this.movePlane.set(new THREE.Vector3(0, 1, 0), -this.ctx.floorY);
-    this.raycaster.ray.intersectPlane(this.movePlane, this.moveOffset);
-    this.dragStartPos = this.fridgeModel.position.clone().sub(this.moveOffset);
-  }
-
-  private handleMove(): void {
-    if (!this.fridgeModel || !this.dragStartPos) return;
-
-    this.raycaster.ray.intersectPlane(this.movePlane, this.moveOffset);
-    const targetPos = this.moveOffset.clone().add(this.dragStartPos);
-
-    targetPos.y = this.ctx.floorY;
-
-    const resolvedPos = this.collision.resolvePosition(
-      targetPos,
-      0.5,
-      2.0
-    );
-
-    this.fridgeModel.position.copy(resolvedPos);
-  }
-
   public onKeyDown(key: string): boolean {
     if (!this.fridgeModel) return false;
 
-    if (key === 'KeyQ' || key === 'KeyE') {
-      if ((this.state === FridgeState.IDLE || this.state === FridgeState.MOVE) && this.isPlayerNearFridge()) {
-        const direction = key === 'KeyQ' ? 1 : -1;
-        this.rotateFridge(direction * this.ROTATION_SPEED);
-        return true;
-      }
+    if (key === 'KeyF' && this.isPlayerNearFridge()) {
+      this.toggleFridgeDoor();
+      return true;
     }
 
     if (key === 'Escape') {
@@ -209,6 +186,25 @@ export class FridgeInteractionSystem {
     return false;
   }
 
+  public toggleFridgeDoor(): void {
+    if (!this.doorAnimationAction) return;
+
+    if (this.isOpen) {
+      this.doorAnimationAction.timeScale = -1;
+      this.doorAnimationAction.paused = false;
+      this.doorAnimationAction.play();
+      this.isOpen = false;
+      this.showPrompt('Pintu Kulkas Ditutup');
+    } else {
+      this.doorAnimationAction.reset();
+      this.doorAnimationAction.timeScale = 1;
+      this.doorAnimationAction.paused = false;
+      this.doorAnimationAction.play();
+      this.isOpen = true;
+      this.showPrompt('Pintu Kulkas Terbuka');
+    }
+  }
+
   private isPlayerNearFridge(): boolean {
     if (!this.fridgeModel) return false;
     const playerPos = this.ctx.camera.position.clone();
@@ -216,27 +212,6 @@ export class FridgeInteractionSystem {
     const fridgePos = this.fridgeModel.position.clone();
     fridgePos.y = this.ctx.floorY;
     return playerPos.distanceTo(fridgePos) < this.INTERACTION_DISTANCE * Math.max(this.ctx.sceneScale, 1e-6);
-  }
-
-  private isPlayerFacingFridge(): boolean {
-    if (!this.fridgeModel) return false;
-
-    const playerPos = this.ctx.camera.position.clone();
-    const fridgePos = this.fridgeModel.position.clone();
-    const toFridge = new THREE.Vector3().subVectors(fridgePos, playerPos).normalize();
-    const forward = new THREE.Vector3();
-    this.ctx.camera.getWorldDirection(forward);
-    forward.y = 0;
-    forward.normalize();
-
-    return forward.dot(toFridge) > 0.5;
-  }
-
-  private rotateFridge(angle: number): void {
-    if (!this.fridgeModel) return;
-
-    this.fridgeModel.rotation.y += angle;
-    this.updateCollider();
   }
 
   private showPrompt(text: string): void {
@@ -263,12 +238,21 @@ export class FridgeInteractionSystem {
 
     const openBtn = document.createElement('button');
     openBtn.className = 'interaction-option-btn';
-    openBtn.textContent = 'Buka Kulkas';
+    openBtn.textContent = this.isOpen ? 'Tutup Pintu Kulkas' : 'Buka Pintu Kulkas';
     openBtn.addEventListener('click', () => {
-      this.openFridge();
+      this.toggleFridgeDoor();
       this.hideInteractionMenu();
     });
     this.interactionPanelOptions.appendChild(openBtn);
+
+    const moveBtn = document.createElement('button');
+    moveBtn.className = 'interaction-option-btn';
+    moveBtn.textContent = '📦 Pindah & Putar Kulkas (G)';
+    moveBtn.addEventListener('click', () => {
+      this.hideInteractionMenu();
+      this.onMoveRequested?.();
+    });
+    this.interactionPanelOptions.appendChild(moveBtn);
 
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'interaction-option-btn cancel';

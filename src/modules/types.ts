@@ -74,10 +74,17 @@ export interface ControlInput {
   lookX: number;
   lookY: number;
   interact: boolean;
+  rotateInput?: number;
+  rotateWheelDelta?: number;
+  rotateSnap?: boolean;
+  moveToggle?: boolean;
+  placeItem?: boolean;
+  cancelMove?: boolean;
 }
 
 export interface CollisionBox {
   min: THREE.Vector3;
   max: THREE.Vector3;
   object3D?: THREE.Object3D;
+  disabled?: boolean;
 }

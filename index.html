@@ -55,7 +55,7 @@
           <span id="player-pos">Posisi: 0, 0, 0</span>
         </div>
         <div id="controls-hint">
-          <span>WASD: Gerak | Mouse: Lihat 360&deg; | Klik: Kunci mouse / Pilih objek | Esc: Lepas mouse</span>
+          <span>WASD: Gerak | Mouse: Lihat | [E]/Klik: Interaksi | [G]: Pindah &amp; Putar | Esc: Lepas mouse</span>
         </div>
         <div id="sensitivity-wrap" style="display:none;">
           <label for="sensitivity-slider">Sensitivitas</label>
@@ -63,6 +63,22 @@
           <span id="sensitivity-value">1.0x</span>
         </div>
       </div>
+      <div id="move-mode-hud" style="display:none;">
+        <div class="move-mode-card">
+          <div class="move-mode-header">
+            <span class="move-badge">&#x1F4E6; Mode Pindah &amp; Putar</span>
+            <span id="move-obj-title">Kulkas</span>
+          </div>
+          <div class="move-mode-instructions">
+            <span class="instruction-item"><kbd>Mouse / WASD</kbd> Arahkan posisi</span>
+            <span class="instruction-item"><kbd>Scroll Wheel</kbd> / <kbd>Q</kbd> <kbd>E</kbd> Putar</span>
+            <span class="instruction-item"><kbd>R</kbd> Putar 90&deg;</span>
+            <span class="instruction-item"><kbd>Klik Kiri</kbd> / <kbd>Space</kbd> Letakkan</span>
+            <span class="instruction-item"><kbd>Esc</kbd> Batal</span>
+          </div>
+        </div>
+      </div>
+      <div id="move-toast" style="display:none;"></div>
       <div id="ergonomics-panel" style="display:none;">
         <div id="ergo-header">
           <h3 id="ergo-title">Analisis Ergonomi</h3>
@@ -81,6 +97,9 @@
         </div>
         <div id="ergo-details"></div>
         <div id="ergo-recommendations"></div>
+        <div id="ergo-actions">
+          <button id="btn-ergo-move" class="ergo-action-btn">&#x1F4E6; Pindah &amp; Putar Barang</button>
+        </div>
       </div>
       <div id="interaction-prompt" style="display:none;">
         <span id="prompt-text">Tekan [E] atau klik untuk menganalisis</span>
@@ -100,7 +119,14 @@
           <div id="joystick-stick"></div>
         </div>
       </div>
+      <div id="mobile-move-buttons" style="display:none;">
+        <button id="btn-mobile-rot-left" class="mobile-move-btn">&#x21BA; 45&deg;</button>
+        <button id="btn-mobile-rot-right" class="mobile-move-btn">&#x21BB; 45&deg;</button>
+        <button id="btn-mobile-place" class="mobile-move-btn place-btn">&#x2713; Letakkan</button>
+        <button id="btn-mobile-cancel" class="mobile-move-btn cancel-btn">&#x2715; Batal</button>
+      </div>
       <div id="mobile-buttons">
+        <button id="btn-mobile-move" class="mobile-action-btn move-btn" style="display:none;">&#x1F4E6; Pindah</button>
         <button id="btn-mobile-interact" class="mobile-action-btn">E</button>
       </div>
       <div id="touch-camera-hint">Geser kiri/kanan untuk lihat</div>

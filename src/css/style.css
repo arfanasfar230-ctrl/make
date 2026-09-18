@@ -721,3 +721,194 @@ html, body {
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+
+/* ===== Furniture Move Mode HUD ===== */
+#move-mode-hud {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  pointer-events: none;
+}
+
+.move-mode-card {
+  background: rgba(0, 20, 50, 0.88);
+  border: 1px solid rgba(0, 220, 255, 0.45);
+  border-radius: 14px;
+  padding: 12px 20px;
+  backdrop-filter: blur(14px);
+  box-shadow: 0 0 24px rgba(0, 200, 255, 0.2), 0 4px 16px rgba(0,0,0,0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 280px;
+  max-width: 420px;
+  animation: moveModeIn 0.25s ease-out;
+}
+
+@keyframes moveModeIn {
+  from { opacity: 0; transform: translateY(-12px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.move-mode-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.move-badge {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #00eaff;
+  text-transform: uppercase;
+  background: rgba(0,180,255,0.12);
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid rgba(0,180,255,0.25);
+}
+
+#move-obj-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #ffffff;
+  opacity: 0.9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.move-mode-instructions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.instruction-item {
+  font-size: 0.72rem;
+  color: rgba(200, 230, 255, 0.85);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.instruction-item kbd {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.68rem;
+  font-family: 'Segoe UI', monospace;
+  color: #ffffff;
+  white-space: nowrap;
+}
+
+/* ===== Move Toast ===== */
+#move-toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 30, 60, 0.92);
+  border: 1px solid rgba(0, 200, 255, 0.35);
+  border-radius: 10px;
+  padding: 10px 20px;
+  font-size: 0.82rem;
+  color: #e0f4ff;
+  z-index: 250;
+  white-space: nowrap;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  max-width: 90vw;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.toast-fade {
+  animation: toastFadeOut 3.5s ease forwards;
+}
+
+@keyframes toastFadeOut {
+  0%   { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ===== Ergonomics Panel Move Button ===== */
+#ergo-actions {
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+}
+
+.ergo-action-btn {
+  background: linear-gradient(135deg, #0077cc, #00aaff);
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 20px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  box-shadow: 0 3px 12px rgba(0,150,255,0.3);
+}
+
+.ergo-action-btn:hover {
+  background: linear-gradient(135deg, #0088ee, #22bbff);
+  transform: translateY(-1px);
+  box-shadow: 0 5px 18px rgba(0,170,255,0.4);
+}
+
+/* ===== Mobile Move Buttons ===== */
+#mobile-move-buttons {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  flex-direction: row;
+  gap: 10px;
+  z-index: 210;
+}
+
+.mobile-move-btn {
+  background: rgba(0, 30, 60, 0.88);
+  border: 1px solid rgba(0, 200, 255, 0.4);
+  border-radius: 10px;
+  color: #c8eeff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 12px 18px;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  transition: background 0.15s, transform 0.1s;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.mobile-move-btn:active {
+  background: rgba(0, 100, 180, 0.75);
+  transform: scale(0.95);
+}
+
+.mobile-move-btn.place-btn {
+  background: rgba(0, 100, 50, 0.88);
+  border-color: rgba(0, 255, 120, 0.4);
+  color: #b0ffcf;
+}
+
+.mobile-move-btn.cancel-btn {
+  background: rgba(100, 20, 20, 0.88);
+  border-color: rgba(255, 80, 80, 0.4);
+  color: #ffc0c0;
+}
+
+#btn-mobile-move {
+  position: relative;
+  z-index: 210;
+}
