@@ -126,17 +126,13 @@ gltfLoader.parse(glb, pathToFileURL(resolvePath(filePath)).href, (gltf) => {
   model.traverse((o) => { if (o.userData.interactable === true) interactables.push(o); });
   console.log(`\n=== INTERACTABLES (${interactables.length}) ===`);
   for (const o of interactables) {
-    const f = o.userData.faucet;
-    console.log(`node=${o.name} interaction=${o.userData.interaction} ` +
-      (f ? `nozzle=(${f.nozzle.x.toFixed(2)}, ${f.nozzle.y.toFixed(2)}, ${f.nozzle.z.toFixed(2)}) splashY=${f.splashY.toFixed(2)}` : 'no faucet data'));
-    let origin = null;
-    o.traverse((c) => { if (c.name === 'waterOrigin') origin = c; });
-    if (origin) {
-      const wp = new THREE.Vector3();
-      origin.getWorldPosition(wp);
-      console.log(`  waterOrigin world=(${wp.x.toFixed(2)}, ${wp.y.toFixed(2)}, ${wp.z.toFixed(2)})`);
+    const line = `node=${o.name} interaction=${o.userData.interaction}` +
+      (o.userData.interaction === 'faucet' ? ` faucetOpen=${o.userData.faucetOpen === true}` : '');
+    const faucet = o.userData.faucet;
+    if (faucet && faucet.nozzle) {
+      console.log(line + ` nozzle=(${faucet.nozzle.x.toFixed(3)}, ${faucet.nozzle.y.toFixed(3)}, ${faucet.nozzle.z.toFixed(3)}) splashY=${faucet.splashY.toFixed(3)}`);
     } else {
-      console.log('  waterOrigin MISSING');
+      console.log(line);
     }
   }
 }, (err) => {

@@ -329,19 +329,6 @@ export class FurnitureMoveSystem {
     newBox.getCenter(this.currentObj.center);
     this.currentObj.surfaceY = newBox.max.y;
 
-    // If faucet data exists, update world nozzle position and splash
-    if (this.currentObj.object3D.userData.faucet) {
-      const faucetData = this.currentObj.object3D.userData.faucet as {
-        nozzle?: THREE.Vector3;
-        splashY?: number;
-      };
-      const origin = this.currentObj.object3D.getObjectByName('waterOrigin');
-      if (origin && faucetData.nozzle) {
-        origin.getWorldPosition(faucetData.nozzle);
-        faucetData.splashY = this.findSplashY(faucetData.nozzle);
-      }
-    }
-
     // Re-enable and update collision box
     this.collision.updateObjectCollision(this.currentObj.object3D);
 
@@ -388,24 +375,5 @@ export class FurnitureMoveSystem {
     this.indicatorGroup.visible = false;
 
     this.events.onCancelled?.(cancelledObj);
-  }
-
-  private findSplashY(nozzle: THREE.Vector3): number {
-    const model = this.ctx.kitchenModel;
-    if (model) {
-      const ray = new THREE.Raycaster(
-        new THREE.Vector3(nozzle.x, nozzle.y - 0.05, nozzle.z),
-        new THREE.Vector3(0, -1, 0),
-        0,
-        15
-      );
-      const hits = ray.intersectObject(model, true);
-      for (const hit of hits) {
-        if (hit.object.visible && hit.distance > 1e-4) {
-          return Math.min(hit.point.y + 0.03, nozzle.y - 0.2);
-        }
-      }
-    }
-    return nozzle.y - 1.6;
   }
 }

@@ -63,6 +63,127 @@ const G121_SUBGROUP_CATEGORY: Record<string, KitchenObjectCategory | 'skip'> = {
   Mesh11: 'counter',   // the worktop slab itself
 };
 
+/** Visible spout/corong mesh inside the faucet group (G_121 > _ra1 > Mesh9). */
+const FAUCET_SPOUT_MESH_NAME = 'Mesh9_img10_17_0';
+
+/**
+ * Slight X-only nudge for the water stream. The anchor is the plant mesh
+ * (Mesh9), so the stream is shifted a little to the left (world -X) to sit off
+ * it. Y, Z, size, shape and animation are left untouched.
+ */
+const FAUCET_WATER_X_OFFSET = -20.25;
+
+/** Slight Z nudge to bring the stream toward the viewer (world +Z). */
+const FAUCET_WATER_Z_OFFSET = 0.95;
+
+/** Slight Y nudge to raise the stream (world +Y). */
+const FAUCET_WATER_Y_OFFSET = 0.95;
+
+export interface FaucetWaterAnchor {
+  /** Spout exit point, in WORLD coordinates. */
+  nozzle: THREE.Vector3;
+  /** World Y where the stream hits the basin. */
+  splashY: number;
+}
+
+/**
+ * Computes the water anchor for a faucet group.
+ *
+ * The spout tip is derived from the real geometry of `Mesh9_img10_17_0`: every
+ * vertex is transformed by `matrixWorld`, so the parent rotation and scale
+ * (the GLB root is rotated and unit-scaled) are fully accounted for. The basin
+ * rim is taken from the lowest mesh in the group, and the splash height is
+ * found by raycasting straight down from the nozzle.
+ *
+ * Exported so the interaction system can (re)compute the anchor at runtime.
+ */
+export function computeFaucetWaterAnchor(
+  node: THREE.Object3D,
+  ctx: SceneContext
+): FaucetWaterAnchor {
+  node.updateWorldMatrix(true, true);
+
+  const meshes: Array<{ mesh: THREE.Mesh; box: THREE.Box3 }> = [];
+  node.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (mesh.isMesh === true) {
+      meshes.push({ mesh, box: new THREE.Box3().setFromObject(mesh) });
+    }
+  });
+  if (meshes.length === 0) {
+    return { nozzle: new THREE.Vector3(), splashY: 0 };
+  }
+
+  const byTop = [...meshes].sort((a, b) => a.box.max.y - b.box.max.y);
+  const basinTop = byTop[0].box.max.y;
+  const spout =
+    meshes.find((m) => m.mesh.name === FAUCET_SPOUT_MESH_NAME) ??
+    byTop[byTop.length - 1];
+
+  const box = spout.box;
+  const centerZ = (box.min.z + box.max.z) / 2;
+  const attr = spout.mesh.geometry.getAttribute('position') as
+    | THREE.BufferAttribute
+    | undefined;
+  const v = new THREE.Vector3();
+  const front: THREE.Vector3[] = [];
+  if (attr) {
+    for (let i = 0; i < attr.count; i++) {
+      v.fromBufferAttribute(attr, i).applyMatrix4(spout.mesh.matrixWorld);
+      // Keep the front (player-facing) half above the basin rim: the opening.
+      if (v.y > basinTop + 0.3 && v.z > centerZ) front.push(v.clone());
+    }
+  }
+
+  let nozzle: THREE.Vector3;
+  if (front.length > 0) {
+    front.sort((a, b) => a.y - b.y);
+    const k = Math.min(12, front.length);
+    const centroid = new THREE.Vector3();
+    let lowestY = Infinity;
+    for (let i = 0; i < k; i++) {
+      centroid.add(front[i]);
+      lowestY = Math.min(lowestY, front[i].y);
+    }
+    centroid.divideScalar(k);
+    nozzle = new THREE.Vector3(centroid.x, lowestY - 0.02, centroid.z);
+  } else {
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    nozzle = new THREE.Vector3(center.x, basinTop + 0.4, box.max.z - 0.15);
+  }
+
+  // Resolve the splash height from the original position (so the splash Y is
+  // unaffected), then apply the anchor nudges: left (X), toward the viewer (Z)
+  // and slightly up (Y).
+  const splashY = findSplashY(nozzle, ctx);
+  nozzle.x += FAUCET_WATER_X_OFFSET;
+  nozzle.z += FAUCET_WATER_Z_OFFSET;
+  nozzle.y += FAUCET_WATER_Y_OFFSET;
+
+  return { nozzle, splashY };
+}
+
+/** First surface directly below the nozzle (basin): where water lands. */
+export function findSplashY(nozzle: THREE.Vector3, ctx: SceneContext): number {
+  const model = ctx.kitchenModel;
+  if (model) {
+    const raycaster = new THREE.Raycaster(
+      new THREE.Vector3(nozzle.x, nozzle.y - 0.05, nozzle.z),
+      new THREE.Vector3(0, -1, 0),
+      0,
+      12
+    );
+    const hits = raycaster.intersectObject(model, true);
+    for (const hit of hits) {
+      if (hit.object.visible && hit.distance > 1e-4) {
+        return Math.min(hit.point.y + 0.03, nozzle.y - 0.2);
+      }
+    }
+  }
+  return nozzle.y - 1.6;
+}
+
 export class AssetLoader {
   private loader: GLTFLoader;
   private progressCallback?: (progress: number) => void;
@@ -303,7 +424,8 @@ export class AssetLoader {
     groupNode.userData.interaction = 'faucet';
     groupNode.userData.displayName = 'Wastafel Meja Kerja 2';
 
-    // Set up faucet data for water effect (similar to markFaucetInteractive)
+    // Faucet materials are cloned once so hover highlight never tints the
+    // rest of the kitchen (materials may be shared across the model).
     const highlightMaterials: THREE.Material[] = [];
     groupNode.traverse((child) => {
       if ((child as THREE.Mesh).isMesh !== true) return;
@@ -321,32 +443,6 @@ export class AssetLoader {
       }
     });
     groupNode.userData.highlightMaterials = highlightMaterials;
-
-    // Create a simple nozzle position at the front edge of the counter
-    const box = new THREE.Box3().setFromObject(groupNode);
-    const center = new THREE.Vector3();
-    box.getCenter(center);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-
-    // Place nozzle at front center of counter, slightly above surface
-    const nozzle = new THREE.Vector3(
-      center.x,
-      box.max.y + 0.15,
-      box.max.z - 0.1
-    );
-
-    // Find splash surface below
-    const splashY = this.findSplashY(nozzle, ctx);
-
-    // Create water origin helper
-    const origin = new THREE.Object3D();
-    origin.name = 'waterOrigin';
-    groupNode.add(origin);
-    groupNode.updateWorldMatrix(true, false);
-    origin.position.copy(groupNode.worldToLocal(nozzle.clone()));
-
-    groupNode.userData.faucet = { nozzle, splashY };
     groupNode.userData.faucetOpen = false;
   }
 
@@ -477,15 +573,14 @@ export class AssetLoader {
   }
 
   /**
-   * Tags the faucet group (Mesh9) as the single interactable faucet object and
-   * derives where its water comes from, without touching the model transform:
+   * Tags the faucet group (Mesh9) as the single interactable faucet object,
+   * without touching the model transform:
    *   - `userData.interactable = true` so the crosshair raycast can find it,
    *   - faucet materials are cloned once so hover highlight never tints the
    *     rest of the kitchen (materials may be shared across the model),
-   *   - the nozzle tip is located from the spout geometry (lowest vertex of
-   *     the tall faucet part above the basin rim, on the front half),
-   *   - a `waterOrigin` helper Object3D is placed exactly at the nozzle tip,
-   *   - the splash height is the first surface hit by a downward ray.
+   *   - `userData.faucetOpen = false` tracks the ON/OFF state,
+   *   - `userData.faucet = { nozzle, splashY }` (WORLD coords) anchors the
+   *     water effect to the real spout tip of `Mesh9_img10_17_0`.
    */
   private markFaucetInteractive(node: THREE.Object3D, ctx: SceneContext): void {
     node.userData.interactable = true;
@@ -508,81 +603,11 @@ export class AssetLoader {
       }
     });
     node.userData.highlightMaterials = highlightMaterials;
-
-    const meshes: THREE.Mesh[] = [];
-    node.traverse((child) => {
-      if ((child as THREE.Mesh).isMesh === true) meshes.push(child as THREE.Mesh);
-    });
-    if (meshes.length === 0) return;
-
-    const boxes = meshes.map((m) => ({ mesh: m, box: new THREE.Box3().setFromObject(m) }));
-    boxes.sort((a, b) => a.box.max.y - b.box.max.y);
-    const basinTop = boxes[0].box.max.y;
-    const tall = boxes[boxes.length - 1];
-
-    const nozzle = this.findNozzleTip(tall.mesh, tall.box, basinTop);
-    const splashY = this.findSplashY(nozzle, ctx);
-
-    const origin = new THREE.Object3D();
-    origin.name = 'waterOrigin';
-    node.add(origin);
-    node.updateWorldMatrix(true, false);
-    origin.position.copy(node.worldToLocal(nozzle.clone()));
-
-    node.userData.faucet = { nozzle, splashY };
     node.userData.faucetOpen = false;
-  }
 
-  /**
-   * Nozzle tip = the lowest vertex of the tall faucet part that sits above the
-   * basin rim on the front (player-facing) half — the underside of the spout
-   * head where water leaves the tap.
-   */
-  private findNozzleTip(mesh: THREE.Mesh, box: THREE.Box3, basinTop: number): THREE.Vector3 {
-    const centerZ = (box.min.z + box.max.z) / 2;
-    const attr = mesh.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-    const v = new THREE.Vector3();
-    let best: THREE.Vector3 | null = null;
-
-    if (attr) {
-      for (let i = 0; i < attr.count; i++) {
-        v.fromBufferAttribute(attr, i).applyMatrix4(mesh.matrixWorld);
-        if (v.y > basinTop + 0.3 && v.z > centerZ) {
-          if (!best || v.y < best.y) {
-            best = v.clone();
-          }
-        }
-      }
-    }
-
-    if (best) {
-      best.y -= 0.05;
-      return best;
-    }
-
-    const center = new THREE.Vector3();
-    box.getCenter(center);
-    return new THREE.Vector3(center.x, basinTop + 0.4, box.max.z - 0.15);
-  }
-
-  /** First surface below the nozzle (basin / worktop): where water lands. */
-  private findSplashY(nozzle: THREE.Vector3, ctx: SceneContext): number {
-    const model = ctx.kitchenModel;
-    if (model) {
-      const raycaster = new THREE.Raycaster(
-        new THREE.Vector3(nozzle.x, nozzle.y - 0.05, nozzle.z),
-        new THREE.Vector3(0, -1, 0),
-        0,
-        12
-      );
-      const hits = raycaster.intersectObject(model, true);
-      for (const hit of hits) {
-        if (hit.object.visible && hit.distance > 1e-4) {
-          return Math.min(hit.point.y + 0.03, nozzle.y - 0.2);
-        }
-      }
-    }
-    return nozzle.y - 1.6;
+    // World-space water anchor taken from the real spout mesh.
+    const anchor = computeFaucetWaterAnchor(node, ctx);
+    node.userData.faucet = { nozzle: anchor.nozzle, splashY: anchor.splashY };
   }
 
   private pushInteractive(

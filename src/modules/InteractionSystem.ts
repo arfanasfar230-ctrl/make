@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { SceneContext } from './types';
-import { FaucetWater } from './FaucetWater';
 import { WindowSystem, WindowData } from './WindowSystem';
+import { FaucetWater } from './FaucetWater';
+import { computeFaucetWaterAnchor } from './AssetLoader';
 
 export const INTERACT_PROMPT = 'F / Klik untuk berinteraksi';
 
@@ -24,8 +25,8 @@ export class InteractionSystem {
   private hovered: THREE.Object3D | null = null;
   private hoveredType: InteractableType = 'none';
   private highlightMats: Array<{ mat: THREE.Material & { emissive?: THREE.Color }; hex: number }> = [];
-  private water: FaucetWater | null = null;
   private windowSystem: WindowSystem;
+  private water: FaucetWater | null = null;
   private readonly hoverEmissive = 0x1d3a4a;
 
   constructor(ctx: SceneContext) {
@@ -36,17 +37,25 @@ export class InteractionSystem {
 
     const model = ctx.kitchenModel;
     if (model) {
+      let faucetWithWater: THREE.Object3D | null = null;
       model.traverse((child) => {
         if (child.userData.interactable === true) {
           this.roots.push(child);
           if (child.userData.interaction === 'faucet') {
-            this.faucetRoot = child;
+            // Prefer the faucet that carries a water anchor (the real spout
+            // mesh); otherwise keep the last faucet found.
+            if (child.userData.faucet) {
+              faucetWithWater = child;
+            } else {
+              this.faucetRoot = child;
+            }
           }
         }
         if (child.userData.interactable === true && child.userData.interaction === 'window') {
           this.windowRoots.set(child.userData.windowName, child);
         }
       });
+      if (faucetWithWater) this.faucetRoot = faucetWithWater;
     }
 
     if (this.faucetRoot) {
@@ -61,14 +70,28 @@ export class InteractionSystem {
         }
       }
 
-      const faucetData = this.faucetRoot.userData.faucet as
+      // Resolve the water anchor (world spout tip + basin splash Y). Prefer the
+      // data stamped at load time; recompute from the spout geometry otherwise.
+      let nozzle: THREE.Vector3 | undefined;
+      let splashY: number | undefined;
+      const stored = this.faucetRoot.userData.faucet as
         | { nozzle?: THREE.Vector3; splashY?: number }
         | undefined;
-      if (faucetData && faucetData.nozzle && faucetData.splashY !== undefined) {
+      if (stored && stored.nozzle && stored.splashY !== undefined) {
+        nozzle = stored.nozzle;
+        splashY = stored.splashY;
+      } else {
+        const anchor = computeFaucetWaterAnchor(this.faucetRoot, ctx);
+        nozzle = anchor.nozzle;
+        splashY = anchor.splashY;
+        this.faucetRoot.userData.faucet = { nozzle, splashY };
+      }
+
+      if (nozzle && splashY !== undefined) {
         this.water = new FaucetWater(
           ctx.scene,
-          faucetData.nozzle,
-          faucetData.splashY,
+          nozzle,
+          splashY,
           Math.max(ctx.sceneScale, 1e-6)
         );
       }
@@ -79,7 +102,7 @@ export class InteractionSystem {
     return this.windowSystem;
   }
 
-  /** Raycast from the camera center; update hover highlight + water. */
+  /** Raycast from the camera center; update hover highlight. */
   public update(delta: number): THREE.Object3D | null {
     if (this.roots.length > 0) {
       const S = Math.max(this.ctx.sceneScale, 1e-6);
@@ -90,11 +113,11 @@ export class InteractionSystem {
       this.setHovered(interactable);
     }
 
+    this.windowSystem.update(delta);
+
     if (this.water) {
       this.water.update(delta, Math.max(this.ctx.sceneScale, 1e-6));
     }
-
-    this.windowSystem.update(delta);
 
     return this.hovered;
   }
@@ -138,15 +161,17 @@ export class InteractionSystem {
 
   /**
    * Run the interaction for the hovered object.
-   * Faucet: toggles CLOSED <-> OPEN.
+   * Faucet: toggles the water + userData.faucetOpen (CLOSED <-> OPEN).
    * Window: toggles OPEN <-> CLOSED.
    * Returns true when something happened.
    */
   public tryInteract(): boolean {
     if (!this.hovered) return false;
-    if (this.hovered === this.faucetRoot && this.water) {
-      this.water.setOpen(!this.water.isOpen());
-      this.hovered.userData.faucetOpen = this.water.isOpen();
+    if (this.hoveredType === 'faucet') {
+      const next = this.water ? !this.water.isOpen() : !(this.hovered.userData.faucetOpen === true);
+      if (this.water) this.water.setOpen(next);
+      this.hovered.userData.faucetOpen = next;
+      if (this.faucetRoot) this.faucetRoot.userData.faucetOpen = next;
       return true;
     }
     if (this.hoveredType === 'window') {
@@ -160,6 +185,7 @@ export class InteractionSystem {
   }
 
   public isFaucetOpen(): boolean {
-    return this.water ? this.water.isOpen() : false;
+    if (this.water) return this.water.isOpen();
+    return this.faucetRoot ? this.faucetRoot.userData.faucetOpen === true : false;
   }
 }
