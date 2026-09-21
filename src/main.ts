@@ -279,6 +279,9 @@ kitchenModel: null,
 
       this.collision = new CollisionSystem(this.ctx);
       this.ergonomics = new ErgonomicsSystem(this.ctx);
+
+      await this.loadJendelaG1();
+
       this.interaction = new InteractionSystem(this.ctx);
 
       await this.loadFridge();
@@ -454,6 +457,44 @@ kitchenModel: null,
         this.furnitureMove.startMoving(fridgeObj);
       }
     };
+  }
+
+  private async loadJendelaG1(): Promise<void> {
+    const windowUrl = `${GLB_BASE}models/Jendela_G1.glb`;
+    const loader = new GLTFLoader();
+    const gltf = await loader.loadAsync(windowUrl);
+    const windowModel = gltf.scene;
+    windowModel.name = 'jendela_g1';
+
+    windowModel.updateMatrixWorld(true);
+    const bbox = new THREE.Box3().setFromObject(windowModel);
+    const center = new THREE.Vector3();
+    bbox.getCenter(center);
+
+    const OPENING_CENTER = new THREE.Vector3(-0.25, 16.90, 14.00);
+    windowModel.position.set(
+      OPENING_CENTER.x - center.x,
+      OPENING_CENTER.y - center.y,
+      OPENING_CENTER.z - center.z
+    );
+
+    windowModel.userData.interactable = true;
+    windowModel.userData.interaction = 'window';
+    windowModel.userData.windowName = 'jendela_g1';
+    windowModel.userData.windowLabel = 'Jendela G1';
+
+    const mixer = new THREE.AnimationMixer(windowModel);
+    const openClip = gltf.animations.find((clip) => clip.name === 'OPEN') ?? null;
+    const closeClip = gltf.animations.find((clip) => clip.name === 'CLOSE') ?? null;
+    windowModel.userData.mixer = mixer;
+    windowModel.userData.windowOpen = openClip;
+    windowModel.userData.windowClose = closeClip;
+
+    if (this.ctx.kitchenModel) {
+      this.ctx.kitchenModel.add(windowModel);
+    } else {
+      this.ctx.scene.add(windowModel);
+    }
   }
 
   private setupReachIndicator(): void {

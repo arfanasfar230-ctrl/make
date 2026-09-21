@@ -105,6 +105,13 @@ export class AssetLoader {
     ctx.kitchenModel = model;
     ctx.scene.add(model);
 
+    // G_1 is the tall west-wall cabinet registered as a window interactable
+    // (labelled "Kabinet Dapur"). It is stripped from the scene entirely for
+    // testing; the real glass windows (G_67, G_68, G_69) are left untouched.
+    // Removal happens before any analysis so every downstream system (bbox,
+    // collision, window interactables) never sees it.
+    this.removeModelNode(model, 'G_1');
+
     const box = new THREE.Box3().setFromObject(model);
     ctx.sceneBoundingBox = box;
     ctx.floorY = box.min.y;
@@ -274,6 +281,20 @@ export class AssetLoader {
     }
 
     this.assignDisplayNames(ctx);
+  }
+
+  /**
+   * Removes a named node (and its whole subtree) from a loaded model. Used to
+   * strip a single model node at runtime without touching the .glb itself.
+   */
+  private removeModelNode(model: THREE.Object3D, name: string): void {
+    const nodes: THREE.Object3D[] = [];
+    model.traverse((node) => {
+      if (node.name === name) nodes.push(node);
+    });
+    for (const node of nodes) {
+      if (node.parent) node.parent.remove(node);
+    }
   }
 
   private markSinkInteractive(groupNode: THREE.Object3D, ctx: SceneContext): void {
@@ -760,12 +781,11 @@ export class AssetLoader {
   }
 
   private setupWindowInteractables(model: THREE.Object3D): void {
-    const windowGroupNames = ['G_67', 'G_68', 'G_69', 'G_1'];
+    const windowGroupNames = ['G_67', 'G_68', 'G_69'];
     const windowLabels: Record<string, string> = {
       'G_67': 'Jendela 1',
       'G_68': 'Jendela 2',
       'G_69': 'Jendela 3',
-      'G_1': 'Kabinet Dapur',
     };
 
     model.traverse((node) => {

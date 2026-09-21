@@ -10,6 +10,9 @@ export interface WindowData {
   isOpen: boolean;
   outsideView: THREE.Mesh | null;
   windParticles: THREE.Points | null;
+  mixer: THREE.AnimationMixer | null;
+  openClip: THREE.AnimationClip | null;
+  closeClip: THREE.AnimationClip | null;
 }
 
 export class WindowSystem {
@@ -29,6 +32,29 @@ export class WindowSystem {
 
   private findAndSetupWindows(model: THREE.Object3D): void {
     model.traverse((node) => {
+      if (node.userData.interaction === 'window' && node.userData.mixer) {
+        const windowName = node.userData.windowName ?? node.name;
+        if (this.windows.has(windowName)) return;
+        const cursor: { mesh: THREE.Mesh | null } = { mesh: null };
+        node.traverse((o) => {
+          if (!cursor.mesh && (o as THREE.Mesh).isMesh) cursor.mesh = o as THREE.Mesh;
+        });
+        const mesh = cursor.mesh;
+        this.windows.set(windowName, {
+          group: node,
+          mesh: mesh!,
+          originalRotation: mesh ? mesh.rotation.clone() : new THREE.Euler(),
+          originalPosition: mesh ? mesh.position.clone() : new THREE.Vector3(),
+          originalScale: mesh ? mesh.scale.clone() : new THREE.Vector3(1, 1, 1),
+          isOpen: false,
+          outsideView: null,
+          windParticles: null,
+          mixer: node.userData.mixer,
+          openClip: node.userData.windowOpen ?? null,
+          closeClip: node.userData.windowClose ?? null,
+        });
+        return;
+      }
       node.traverse((child) => {
         if ((child as THREE.Mesh).isMesh !== true) return;
         const mesh = child as THREE.Mesh;
@@ -43,6 +69,9 @@ export class WindowSystem {
             isOpen: false,
             outsideView: null,
             windParticles: null,
+            mixer: null,
+            openClip: null,
+            closeClip: null,
           };
           this.windows.set(windowName, windowData);
         }
@@ -63,8 +92,23 @@ export class WindowSystem {
     if (!window) return false;
 
     window.isOpen = !window.isOpen;
-    this.animateWindow(window);
+    if (window.mixer) {
+      this.playClip(window);
+    } else {
+      this.animateWindow(window);
+    }
     return true;
+  }
+
+  private playClip(window: WindowData): void {
+    const clip = window.isOpen ? window.openClip : window.closeClip;
+    if (!clip || !window.mixer) return;
+    window.mixer.stopAllAction();
+    const action = window.mixer.clipAction(clip);
+    action.reset();
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
+    action.play();
   }
 
   private animateWindow(window: WindowData): void {
@@ -244,6 +288,9 @@ export class WindowSystem {
 
   public update(delta: number): void {
     for (const window of this.windows.values()) {
+      if (window.mixer) {
+        window.mixer.update(delta);
+      }
       if (window.windParticles && window.windParticles.userData.update) {
         window.windParticles.userData.update(delta);
       }
