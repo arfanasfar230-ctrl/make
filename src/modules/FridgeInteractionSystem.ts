@@ -230,6 +230,8 @@ export class FridgeInteractionSystem {
   public showInteractionMenu(): void {
     if (!this.interactionPanel || !this.interactionPanelOptions) return;
 
+    document.exitPointerLock?.();
+
     this.state = FridgeState.INTERACTION_MENU;
     this.interactionPanelOptions.innerHTML = '';
 

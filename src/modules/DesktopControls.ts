@@ -26,6 +26,10 @@ export class DesktopControls {
   private lookX: number = 0;
   private lookY: number = 0;
 
+  // Double-click detection for pointer lock
+  private lastClickTime = 0;
+  private readonly DOUBLE_CLICK_THRESHOLD = 300; // ms
+
   // Fallback drag-look (Pointer Lock unavailable)
   private dragActive = false;
   private lastDrag = { x: 0, y: 0 };
@@ -109,9 +113,23 @@ export class DesktopControls {
           this.pendingInteract = true;
           this.pendingPlace = true;
         } else {
-          this.tryRequestPointerLock();
+          const now = performance.now();
+          if (now - this.lastClickTime <= this.DOUBLE_CLICK_THRESHOLD) {
+            this.tryRequestPointerLock();
+          }
+          this.lastClickTime = now;
         }
       });
+
+      // Touch support for double-tap to lock
+      this.canvas.addEventListener('touchend', (e) => {
+        if (this.isPointerLocked) return;
+        const now = performance.now();
+        if (now - this.lastClickTime <= this.DOUBLE_CLICK_THRESHOLD) {
+          this.tryRequestPointerLock();
+        }
+        this.lastClickTime = now;
+      }, { passive: true });
     } else {
       // No Pointer Lock API: drag to look, click does not lock.
       this.canvas.addEventListener('click', () => {

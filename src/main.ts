@@ -12,6 +12,8 @@ import { VRSystem } from './modules/VRSystem';
 import { DebugSystem } from './modules/DebugSystem';
 import { FridgeInteractionSystem, FridgeState } from './modules/FridgeInteractionSystem';
 import { FurnitureMoveSystem } from './modules/FurnitureMoveSystem';
+import { DoorTeleportSystem } from './modules/DoorTeleportSystem';
+import { ProximityTeleportSystem } from './modules/ProximityTeleportSystem';
 
 const GLB_BASE = (() => {
   try {
@@ -39,6 +41,8 @@ class KitchenErgonomicsApp {
   private vrSystem: VRSystem | null = null;
   private debugSystem!: DebugSystem;
   private furnitureMove!: FurnitureMoveSystem;
+  private doorTeleport!: DoorTeleportSystem;
+  private proximityTeleport!: ProximityTeleportSystem;
 
   private currentMode: GameMode = 'desktop';
   private isRunning = false;
@@ -283,6 +287,9 @@ kitchenModel: null,
       await this.loadJendelaG1();
 
       this.interaction = new InteractionSystem(this.ctx);
+
+      this.doorTeleport = new DoorTeleportSystem(this.ctx);
+      this.proximityTeleport = new ProximityTeleportSystem(this.ctx);
 
       await this.loadFridge();
 
@@ -792,6 +799,8 @@ kitchenModel: null,
     const hoverType = this.interaction?.getHoverType?.();
     if (!hover || !hoverType || hoverType === 'none') return;
 
+    document.exitPointerLock?.();
+
     this.interactionPanelOptions.innerHTML = '';
 
     const title = this.interactionPanel.querySelector('h4')!;
@@ -840,6 +849,8 @@ kitchenModel: null,
 
   private showErgonomics(obj: InteractiveObject): void {
     const result = this.ergonomics.analyze(this.player.state, obj);
+
+    document.exitPointerLock?.();
 
     this.ergoPanel.style.display = 'block';
     this.ergoTitle.textContent = obj.displayName;
@@ -998,6 +1009,8 @@ kitchenModel: null,
     if (this.fridgeInteraction) {
       this.fridgeInteraction.update(delta);
     }
+
+    this.proximityTeleport.update();
 
     if (this.showReachIndicator) {
       this.updateReachIndicator();
