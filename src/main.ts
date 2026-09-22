@@ -454,6 +454,7 @@ kitchenModel: null,
       center: finalCenter.clone(),
       height: finalSize.y,
       surfaceY: finalBox.max.y,
+      movable: true,
     });
 
     this.fridgeInteraction = new FridgeInteractionSystem(this.ctx, this.collision);
@@ -642,7 +643,7 @@ kitchenModel: null,
     btn.addEventListener('click', () => {
       const obj = this.highlightedObject;
       this.hideErgonomics();
-      if (obj && this.furnitureMove) {
+      if (obj && obj.movable && this.furnitureMove) {
         this.furnitureMove.startMoving(obj);
       }
     });
@@ -666,6 +667,7 @@ kitchenModel: null,
     let closest: InteractiveObject | null = null;
     let closestDist = Infinity;
     for (const obj of this.ctx.interactiveObjects) {
+      if (!obj.movable) continue;
       const d = playerPos.distanceTo(obj.center);
       if (d < maxDist && d < closestDist) {
         closestDist = d;
@@ -695,6 +697,7 @@ kitchenModel: null,
     // Collect all mesh objects from interactive objects for raycasting
     const candidateMeshes: THREE.Object3D[] = [];
     for (const obj of this.ctx.interactiveObjects) {
+      if (!obj.movable) continue;
       obj.object3D.traverse((child) => {
         if ((child as THREE.Mesh).isMesh) candidateMeshes.push(child);
       });
@@ -735,6 +738,7 @@ kitchenModel: null,
       const closeRange = 2.2 * scale;
       let bestDot = 0.6; // must be looking roughly at it (within ~53°)
       for (const obj of this.ctx.interactiveObjects) {
+        if (!obj.movable) continue;
         const toObj = new THREE.Vector3().subVectors(obj.center, playerPos);
         const dist = toObj.length();
         if (dist > closeRange) continue;
@@ -854,6 +858,11 @@ kitchenModel: null,
 
     this.ergoPanel.style.display = 'block';
     this.ergoTitle.textContent = obj.displayName;
+
+    const moveBtn = document.getElementById('btn-ergo-move');
+    if (moveBtn) {
+      moveBtn.style.display = obj.movable ? 'block' : 'none';
+    }
 
     const circumference = 2 * Math.PI * 45;
     const offset = circumference - (result.score / 100) * circumference;
@@ -1022,13 +1031,15 @@ kitchenModel: null,
     if (nearest) {
       if (nearest.category === 'fridge') {
         this.promptText.textContent = `${nearest.displayName} — [E] Analisis | [F] Menu | [G] Pindah & Putar`;
-      } else {
+      } else if (nearest.movable) {
         this.promptText.textContent = `${nearest.displayName} — [E] Analisis | [G] Pindah & Putar`;
+      } else {
+        this.promptText.textContent = `${nearest.displayName} — [E] Analisis`;
       }
       this.interactionPrompt.style.display = 'block';
 
       // Show the mobile move button only when near a moveable object
-      if (this.mobileControls) this.mobileControls.showMoveButton(true);
+      if (this.mobileControls) this.mobileControls.showMoveButton(nearest.movable);
 
       if (input.interact) {
         this.showErgonomics(nearest);

@@ -114,6 +114,7 @@ export class FurnitureMoveSystem {
    */
   public startMoving(obj: InteractiveObject): boolean {
     if (this.isMovingActive) return false;
+    if (obj.movable === false) return false;
 
     this.currentObj = obj;
     this.isMovingActive = true;

@@ -31,6 +31,12 @@ export interface InteractiveObject {
   center: THREE.Vector3;
   height: number;
   surfaceY: number;
+  /**
+   * Whether the object can be picked up / moved / rotated via the furniture
+   * move system and highlighted with the move hitbox. Built-in fixtures
+   * (wall cabinets, base cabinetry) are visible but should stay fixed.
+   */
+  movable: boolean;
 }
 
 export type KitchenObjectCategory =

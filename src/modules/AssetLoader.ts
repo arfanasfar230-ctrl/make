@@ -63,6 +63,31 @@ const G121_SUBGROUP_CATEGORY: Record<string, KitchenObjectCategory | 'skip'> = {
   Mesh11: 'counter',   // the worktop slab itself
 };
 
+/**
+ * Built-in fixtures that must stay fixed in the scene. They remain fully
+ * visible and analysable (ergonomics), but are excluded from the move/rotate
+ * hitbox and the furniture move system.
+ *
+ * Upper wall cabinets: G_12, G_19, G_20, G_21 (main run) + G_24, G_25 (ends).
+ * Base cabinet / counter wall units (lower cabinets under the worktop):
+ * G_7, G_8, G_9, G_10, G_16, G_17, G_118.
+ */
+const NON_MOVABLE_GROUPS = new Set<string>([
+  'G_7',
+  'G_8',
+  'G_9',
+  'G_10',
+  'G_12',
+  'G_16',
+  'G_17',
+  'G_19',
+  'G_20',
+  'G_21',
+  'G_24',
+  'G_25',
+  'G_118',
+]);
+
 /** Visible spout/corong mesh inside the faucet group (G_121 > _ra1 > Mesh9). */
 const FAUCET_SPOUT_MESH_NAME = 'Mesh9_img10_17_0';
 
@@ -631,6 +656,7 @@ export class AssetLoader {
       center: center.clone(),
       height: size.y,
       surfaceY: surfaceYOverride !== undefined ? surfaceYOverride : bbox.max.y,
+      movable: !NON_MOVABLE_GROUPS.has(obj.name),
     });
   }
 
