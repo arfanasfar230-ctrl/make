@@ -92,11 +92,40 @@ const NON_MOVABLE_GROUPS = new Set<string>([
 const FAUCET_SPOUT_MESH_NAME = 'Mesh9_img10_17_0';
 
 /**
+ * World-space shift for the sink unit — the `Mesh9` group (sink basin +
+ * faucet) under G_121 > _ra1. Negative = left (world -X).
+ * Two parts, both applied to the node's local X before any analysis runs so
+ * the sink's own hitbox follows the moved geometry and the faucet water
+ * anchor is recomputed at the new spout position:
+ *   - `SINK_SHIFT_X_METERS`: original small nudge (metres),
+ *   - `SINK_SHIFT_X_EXTRA_UNITS`: extra leftward travel from the current
+ *     position (the model's world units, like the sink's printed centre
+ *     coordinate). Requested as four successive "+5" left moves (-20) then a
+ *     "+2 right" move (back toward +X): -18 total now.
+ * No other object, hitbox, the faucet button, or the water animation is
+ * touched, and the GLB stays unmodified.
+ */
+const SINK_SHIFT_X_METERS = -0.2;
+const SINK_SHIFT_X_EXTRA_UNITS = -18;
+
+/**
+ * Renders the sink (`Mesh9` under G_121 > _ra1) transparent/invisible by
+ * making its materials fully transparent. The sink's geometry is left in
+ * place, so its hitbox, collision, position, raycasts, the "Nyalakan Kran"
+ * faucet interaction and the water anchor are all unchanged — only the
+ * material rendering is affected.
+ */
+const SINK_TRANSPARENT = true;
+
+/**
  * Slight X-only nudge for the water stream. The anchor is the plant mesh
  * (Mesh9), so the stream is shifted a little to the left (world -X) to sit off
- * it. Y, Z, size, shape and animation are left untouched.
+ * it. Moved +1, +2 twice, +5 twice, +4, +2 to the right, -1 back to the left,
+ * +0.5 to the right, -0.5 back to the left, +0.25 to the right, -0.25 back to
+ * the left, +0.1 to the right, then -0.05 back to the left (world X) per
+ * request. Y, Z, size, shape and animation are left untouched.
  */
-const FAUCET_WATER_X_OFFSET = -20.25;
+const FAUCET_WATER_X_OFFSET = -0.2;
 
 /** Slight Z nudge to bring the stream toward the viewer (world +Z). */
 const FAUCET_WATER_Z_OFFSET = 0.95;
@@ -266,10 +295,14 @@ export class AssetLoader {
 
     this.calculateSceneScale(model, ctx);
 
+    this.shiftSink(model, ctx);
+
     this.setupLights(ctx);
 
     this.buildInteractiveObjects(model, ctx);
     this.normalizeWorkSurfaces(ctx);
+
+    this.makeSinkTransparent(model);
 
     this.buildWalkableArea(model, ctx);
 
@@ -427,6 +460,62 @@ export class AssetLoader {
     }
 
     this.assignDisplayNames(ctx);
+  }
+
+  /**
+   * Nudges the detected sink (`Mesh9` under G_121 > _ra1) slightly to the
+   * left in world X. Runs before interactive/hitbox analysis so the derived
+   * sink hitbox and the faucet water anchor pick up the new position. It is a
+   * no-op when the expected sink structure is not found.
+   */
+  private shiftSink(model: THREE.Object3D, ctx: SceneContext): void {
+    const worldDx =
+      SINK_SHIFT_X_METERS * Math.max(ctx.sceneScale, 1e-6) +
+      SINK_SHIFT_X_EXTRA_UNITS;
+
+    model.traverse((child) => {
+      if (child.name !== 'Mesh9' || !child.parent || child.parent.name !== '_ra1') return;
+
+      // Convert the world-space delta into this node's local X. The GLB root
+      // chain carries a 0.01 scale, so local units differ from world units.
+      const parent = child.parent;
+      parent.updateWorldMatrix(true, true);
+      const parentXScale = new THREE.Vector3()
+        .setFromMatrixColumn(parent.matrixWorld, 0)
+        .length();
+      if (parentXScale === 0) return;
+
+      child.position.x += worldDx / parentXScale;
+    });
+  }
+
+  /**
+   * Makes the sink unit's meshes render as fully transparent. Runs after
+   * `buildInteractiveObjects`, so it applies to the sink's cloned materials
+   * (created by the faucet highlight wiring) and never leaks onto shared
+   * materials elsewhere in the kitchen. Geometry, hitbox and raycasts are
+   * untouched.
+   */
+  private makeSinkTransparent(model: THREE.Object3D): void {
+    if (!SINK_TRANSPARENT) return;
+
+    model.traverse((child) => {
+      if (child.name !== 'Mesh9' || !child.parent || child.parent.name !== '_ra1') return;
+
+      child.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        if (mesh.isMesh !== true) return;
+        const material = mesh.material as THREE.Material | THREE.Material[] | undefined;
+        if (!material) return;
+        const apply = (mat: THREE.Material): void => {
+          mat.transparent = true;
+          mat.opacity = 0;
+          mat.depthWrite = false;
+        };
+        if (Array.isArray(material)) material.forEach(apply);
+        else apply(material);
+      });
+    });
   }
 
   /**
