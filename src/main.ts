@@ -14,6 +14,7 @@ import { FridgeInteractionSystem, FridgeState } from './modules/FridgeInteractio
 import { FurnitureMoveSystem } from './modules/FurnitureMoveSystem';
 import { DoorTeleportSystem } from './modules/DoorTeleportSystem';
 import { ProximityTeleportSystem } from './modules/ProximityTeleportSystem';
+import { CarrotCleaner } from './modules/CarrotCleaner';
 
 const GLB_BASE = (() => {
   try {
@@ -43,6 +44,7 @@ class KitchenErgonomicsApp {
   private furnitureMove!: FurnitureMoveSystem;
   private doorTeleport!: DoorTeleportSystem;
   private proximityTeleport!: ProximityTeleportSystem;
+  private carrotCleaner!: CarrotCleaner;
 
   private currentMode: GameMode = 'desktop';
   private isRunning = false;
@@ -287,6 +289,15 @@ kitchenModel: null,
       await this.loadJendelaG1();
 
       this.interaction = new InteractionSystem(this.ctx);
+
+      this.carrotCleaner = new CarrotCleaner(this.ctx, {
+        onCleanComplete: () => {
+          console.log('Carrot cleaning complete!');
+        },
+        onClose: () => {
+          console.log('Carrot cleaner closed');
+        }
+      });
 
       this.doorTeleport = new DoorTeleportSystem(this.ctx);
       this.proximityTeleport = new ProximityTeleportSystem(this.ctx);
@@ -596,10 +607,14 @@ kitchenModel: null,
 
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Escape') {
-        this.hideErgonomics();
-        this.hideInteractionPanel();
-        if (this.fridgeInteraction) {
-          this.fridgeInteraction.hideInteractionMenu();
+        if (this.carrotCleaner?.isOpened()) {
+          this.carrotCleaner.close();
+        } else {
+          this.hideErgonomics();
+          this.hideInteractionPanel();
+          if (this.fridgeInteraction) {
+            this.fridgeInteraction.hideInteractionMenu();
+          }
         }
       }
 
@@ -813,6 +828,15 @@ kitchenModel: null,
     if (hoverType === 'faucet') {
       title.textContent = 'Kran Wastafel';
       const isOpen = this.interaction.isFaucetOpen();
+
+      const cleanBtn = document.createElement('button');
+      cleanBtn.className = 'interaction-option-btn';
+      cleanBtn.textContent = '🥕 Bersihkan Wortel';
+      cleanBtn.addEventListener('click', () => {
+        this.hideInteractionPanel();
+        this.carrotCleaner.open();
+      });
+      this.interactionPanelOptions.appendChild(cleanBtn);
 
       const toggleBtn = document.createElement('button');
       toggleBtn.className = 'interaction-option-btn';
