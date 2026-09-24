@@ -24,8 +24,10 @@ export class CarrotCleaner {
   private dirtCtx!: CanvasRenderingContext2D;
   private dirtTexture!: THREE.CanvasTexture;
   private dirtMeshes: THREE.Mesh[] = [];
+  private carrotMaskCanvas: HTMLCanvasElement | null = null;
+  private carrotScrubRegionCanvas: HTMLCanvasElement | null = null;
+  private carrotScratchCanvas: HTMLCanvasElement | null = null;
 
-  private isCleaning = false;
   private cleanProgress = 0;
   private targetProgress = 0;
   private animationId: number | null = null;
@@ -34,8 +36,6 @@ export class CarrotCleaner {
   private isOpen = false;
   private threeInitialized = false;
   private cleanCompleteFired = false;
-  private lastPointerX = 0;
-  private lastPointerY = 0;
   private lastScrubTime = 0;
   private scrubAccumulator = 0;
 
@@ -253,6 +253,124 @@ export class CarrotCleaner {
     this.dirtTexture.colorSpace = THREE.SRGBColorSpace;
   }
 
+  /**
+   * Rasterizes the carrot's UV-space footprint (from the model's geometry +
+   * UV attributes) into a 512x512 mask canvas. Pixels covered by any carrot
+   * triangle are opaque; everything else stays transparent. Used to bound both
+   * dirt painting and brush erasing strictly to the carrot surface.
+   */
+  private buildCarrotMask(root: THREE.Object3D): void {
+    const W = 512;
+    const H = 512;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const cctx = canvas.getContext('2d')!;
+    cctx.clearRect(0, 0, W, H);
+    cctx.fillStyle = '#000';
+    cctx.beginPath();
+
+    root.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const geo = mesh.geometry;
+      const uv = geo.attributes.uv;
+      const index = geo.index;
+      if (!uv) return;
+
+      const px = (i: number) => uv.getX(i) * W;
+      const py = (i: number) => (1 - uv.getY(i)) * H;
+      const count = index ? Math.floor(index.count / 3) : Math.floor(uv.count / 3);
+
+      for (let t = 0; t < count; t++) {
+        const a = index ? index.getX(t * 3) : t * 3;
+        const b = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+        const c = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+        cctx.moveTo(px(a), py(a));
+        cctx.lineTo(px(b), py(b));
+        cctx.lineTo(px(c), py(c));
+        cctx.closePath();
+      }
+    });
+
+    cctx.fill();
+    this.carrotMaskCanvas = canvas;
+  }
+
+  /**
+   * Builds the SCREEN-SPACE scrub region used as the "batas gosok": the union
+   * of every projected triangle of the carrot (the silhouette as seen by the
+   * camera), then dilated by a small tolerance (~40px layar) so brushing near,
+   * but not exactly on, the carrot still counts. Pixels outside this region
+   * never erase dirt / never add progress. No UV∩screen mixing is needed.
+   */
+  private buildScrubRegion(): void {
+    const W = 512;
+    const H = 512;
+    if (!this.carrotGroup || !this.camera) return;
+
+    this.carrotGroup.updateMatrixWorld(true);
+
+    const silhouette = document.createElement('canvas');
+    silhouette.width = W;
+    silhouette.height = H;
+    const sctx = silhouette.getContext('2d')!;
+    sctx.clearRect(0, 0, W, H);
+    sctx.fillStyle = '#000';
+    sctx.beginPath();
+
+    const tmp = new THREE.Vector3();
+    this.carrotGroup.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      if (mesh.name.endsWith('_dirt')) return;
+      const geo = mesh.geometry;
+      const pos = geo.attributes.position;
+      const index = geo.index;
+      if (!pos) return;
+
+      const toScreen = (i: number) => {
+        tmp.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld);
+        tmp.project(this.camera);
+        return { x: (tmp.x * 0.5 + 0.5) * W, y: (0.5 - tmp.y * 0.5) * H };
+      };
+
+      const count = index ? Math.floor(index.count / 3) : Math.floor(pos.count / 3);
+      for (let t = 0; t < count; t++) {
+        const a = index ? index.getX(t * 3) : t * 3;
+        const b = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+        const c = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+        const pa = toScreen(a);
+        const pb = toScreen(b);
+        const pc = toScreen(c);
+        sctx.moveTo(pa.x, pa.y);
+        sctx.lineTo(pb.x, pb.y);
+        sctx.lineTo(pc.x, pc.y);
+        sctx.closePath();
+      }
+    });
+    sctx.fill();
+
+    // Dilasi siluet dengan toleransi gosok (dalam piksel canvas 512).
+    const cssH = this.canvas.clientHeight || 400;
+    const tol = Math.max(2, Math.round(40 * (H / cssH)));
+    const step = Math.max(1, Math.round(tol / 3));
+
+    const region = document.createElement('canvas');
+    region.width = W;
+    region.height = H;
+    const rctx = region.getContext('2d')!;
+    rctx.clearRect(0, 0, W, H);
+    for (let dy = -tol; dy <= tol; dy += step) {
+      for (let dx = -tol; dx <= tol; dx += step) {
+        rctx.drawImage(silhouette, dx, dy);
+      }
+    }
+
+    this.carrotScrubRegionCanvas = region;
+  }
+
   private drawDirtPattern(): void {
     const ctx = this.dirtCtx;
     const w = this.dirtCanvas.width;
@@ -260,6 +378,10 @@ export class CarrotCleaner {
 
     // Mulai transparan (tidak ada kotoran).
     ctx.clearRect(0, 0, w, h);
+
+    // Lapisan dasar kotoran rata supaya baseline progress dekat 0%.
+    ctx.fillStyle = 'rgba(94, 66, 38, 0.72)';
+    ctx.fillRect(0, 0, w, h);
 
     // Splotches kotoran coklat.
     for (let i = 0; i < 120; i++) {
@@ -297,6 +419,15 @@ export class CarrotCleaner {
       ctx.fillRect(-len / 2, -thick / 2, len, thick);
       ctx.restore();
     }
+
+    // Clip kotoran ke area permukaan wortel (UV mask) supaya background/outside
+    // tidak pernah mendapat kotoran dan baseline progress dekat 0%.
+    const mask = this.carrotMaskCanvas;
+    if (mask) {
+      ctx.globalCompositeOperation = 'source-in';
+      ctx.drawImage(mask, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -317,6 +448,10 @@ export class CarrotCleaner {
 
       this.prepareMeshes(this.carrotGroup);
       this.autoFit(this.glbSceneRoot());
+      this.buildCarrotMask(this.carrotGroup);
+      this.buildScrubRegion();
+      this.drawDirtPattern();
+      this.dirtTexture.needsUpdate = true;
       this.applyDirtVisual(0);
       this.statusElement.textContent = 'Gosok untuk membersihkan...';
       this.startAnimation();
@@ -458,6 +593,9 @@ export class CarrotCleaner {
     this.camera.position.set(0, maxFitted * 0.12, distance);
     this.camera.lookAt(fittedCenter);
     this.camera.updateProjectionMatrix();
+    // Pastikan matrixWorld/matrixWorldInverse kamera ter-update SEBELUM
+    // masking/proyeksi dihitung (tanpa ini proyeksi memakai matrix identity).
+    this.camera.updateMatrixWorld(true);
 
     console.log('[CarrotCleaner] camera position:', this.camera.position.toArray().map(v => v.toFixed(3)).join(', '));
     console.log('[CarrotCleaner] camera lookAt:', fittedCenter.toArray().map(v => v.toFixed(3)).join(', '));
@@ -480,40 +618,101 @@ export class CarrotCleaner {
   }
 
   private scrubAtPointer(e: PointerEvent): void {
+    // Pemetaan mouse → canvas sederhana (bukan raycast).
     const rect = this.canvas.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * this.dirtCanvas.width;
     const y = ((e.clientY - rect.top) / rect.height) * this.dirtCanvas.height;
 
-    const brushRadius = 28 * (window.devicePixelRatio || 1);
+    // Batas gosok = siluet wortel di layar + toleransi. Di luar area tersebut
+    // gosokan TIDAK dihitung (tidak erase, tidak menambah progress).
+    const region = this.carrotScrubRegionCanvas;
+    if (region) {
+      const px = Math.max(0, Math.min(this.dirtCanvas.width - 1, Math.round(x)));
+      const py = Math.max(0, Math.min(this.dirtCanvas.height - 1, Math.round(y)));
+      const alpha = region.getContext('2d')!.getImageData(px, py, 1, 1).data[3];
+      if (alpha === 0) return;
+    }
+
+    const brushRadius = 22 * (window.devicePixelRatio || 1);
+
+    // Sapuan menggosok hanya "mengikis" sebagian kotoran per stamp (destination-out
+    // memakai alpha source sebagai kekuatan pengurangan). Untuk membersihkan satu
+    // titik dibutuhkan beberapa lintasan gosokan, sehingga durasi terasa natural
+    // (~15 detik gosok terus-menerus) tanpa timer/rate-limit buatan.
     const g = this.dirtCtx.createRadialGradient(x, y, 0, x, y, brushRadius);
-    g.addColorStop(0, 'rgba(0,0,0,1)');
-    g.addColorStop(0.7, 'rgba(0,0,0,0.6)');
+    g.addColorStop(0, 'rgba(0,0,0,0.55)');
+    g.addColorStop(0.7, 'rgba(0,0,0,0.42)');
     g.addColorStop(1, 'rgba(0,0,0,0)');
 
-    this.dirtCtx.globalCompositeOperation = 'destination-out';
-    this.dirtCtx.fillStyle = g;
-    this.dirtCtx.beginPath();
-    this.dirtCtx.arc(x, y, brushRadius, 0, Math.PI * 2);
-    this.dirtCtx.fill();
-    this.dirtCtx.globalCompositeOperation = 'source-over';
+    const mask = this.carrotMaskCanvas;
+    if (mask) {
+      // Gabungkan brush dengan mask UV wortel, lalu hapus — texel di luar
+      // bentuk wortel dijamin tidak pernah terhapus.
+      if (!this.carrotScratchCanvas) {
+        this.carrotScratchCanvas = document.createElement('canvas');
+        this.carrotScratchCanvas.width = this.dirtCanvas.width;
+        this.carrotScratchCanvas.height = this.dirtCanvas.height;
+      }
+      const scratch = this.carrotScratchCanvas;
+      const sctx = scratch.getContext('2d')!;
+      sctx.clearRect(0, 0, scratch.width, scratch.height);
+      sctx.globalCompositeOperation = 'source-over';
+      sctx.drawImage(mask, 0, 0);
+      sctx.globalCompositeOperation = 'source-in';
+      sctx.fillStyle = g;
+      sctx.beginPath();
+      sctx.arc(x, y, brushRadius, 0, Math.PI * 2);
+      sctx.fill();
+      sctx.globalCompositeOperation = 'source-over';
+
+      this.dirtCtx.globalCompositeOperation = 'destination-out';
+      this.dirtCtx.drawImage(scratch, 0, 0);
+      this.dirtCtx.globalCompositeOperation = 'source-over';
+    } else {
+      this.dirtCtx.globalCompositeOperation = 'destination-out';
+      this.dirtCtx.fillStyle = g;
+      this.dirtCtx.beginPath();
+      this.dirtCtx.arc(x, y, brushRadius, 0, Math.PI * 2);
+      this.dirtCtx.fill();
+      this.dirtCtx.globalCompositeOperation = 'source-over';
+    }
 
     this.dirtTexture.needsUpdate = true;
   }
 
   private updateProgressFromDirt(): void {
     const now = performance.now();
-    if (now - this.lastScrubTime < 80 && this.scrubAccumulator < 1) return;
+    if (now - this.lastScrubTime < 40 && this.scrubAccumulator < 1) return;
     this.lastScrubTime = now;
 
-    const imageData = this.dirtCtx.getImageData(0, 0, this.dirtCanvas.width, this.dirtCanvas.height);
-    const data = imageData.data;
-    let dirtyPx = 0;
-    for (let i = 3; i < data.length; i += 4) {
-      if (data[i] > 32) dirtyPx++;
+    const dirtImg = this.dirtCtx.getImageData(0, 0, this.dirtCanvas.width, this.dirtCanvas.height);
+    const ddata = dirtImg.data;
+
+    // Progress murni dari kotoran yang benar-benar tersisa di dalam area
+    // gosok (scrub region: siluet wortel ∩ UV mask). Tidak ada rate-limit.
+    const region = this.carrotScrubRegionCanvas;
+    const uvMask = this.carrotMaskCanvas;
+    let cleanPct = 0;
+    if (region && uvMask) {
+      const regionImg = region.getContext('2d')!.getImageData(0, 0, region.width, region.height);
+      const rdata = regionImg.data;
+      const maskImg = uvMask.getContext('2d')!.getImageData(0, 0, uvMask.width, uvMask.height);
+      const mdata = maskImg.data;
+      let maskPx = 0;
+      let dirtyPx = 0;
+      const n = ddata.length / 4;
+      for (let i = 0; i < n; i++) {
+        if (rdata[i * 4 + 3] > 127 && mdata[i * 4 + 3] > 127) {
+          maskPx++;
+          if (ddata[i * 4 + 3] > 8) dirtyPx++;
+        }
+      }
+      // Denominator kosong: jangan dianggap 100% — dianggap 0.
+      cleanPct = maskPx > 0 ? ((maskPx - dirtyPx) / maskPx) * 100 : 0;
     }
-    const total = this.dirtCanvas.width * this.dirtCanvas.height;
-    const cleanPct = total > 0 ? ((total - dirtyPx) / total) * 100 : 0;
-    this.targetProgress = Math.min(100, cleanPct);
+
+    // Progress tidak pernah turun.
+    this.targetProgress = Math.max(this.targetProgress, Math.min(100, Math.max(0, cleanPct)));
   }
 
   // ---------------------------------------------------------------------------
@@ -524,12 +723,10 @@ export class CarrotCleaner {
     const animate = () => {
       this.animationId = requestAnimationFrame(animate);
 
-      if (this.carrotGroup) {
-        this.carrotGroup.rotation.y += 0.004;
-      }
-
-      if (this.cleanProgress < this.targetProgress) {
-        this.cleanProgress = Math.min(this.targetProgress, this.cleanProgress + (this.targetProgress - this.cleanProgress) * 0.18);
+      // Progress mengikuti kebersihan nyata secara langsung. targetProgress
+      // sudah dijamin tidak pernah turun (lihat updateProgressFromDirt).
+      if (this.cleanProgress !== this.targetProgress) {
+        this.cleanProgress = this.targetProgress;
         this.applyDirtVisual(this.cleanProgress / 100);
         this.updateStatus();
       }
@@ -552,35 +749,27 @@ export class CarrotCleaner {
 
     this.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
     this.canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
-    this.canvas.addEventListener('pointerup', () => this.onPointerUp());
-    this.canvas.addEventListener('pointerleave', () => this.onPointerUp());
-    this.canvas.addEventListener('pointercancel', () => this.onPointerUp());
 
     this.canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
       if (this.carrotGroup) {
         this.carrotGroup.rotation.y += e.deltaY * 0.005;
+        this.carrotGroup.updateMatrixWorld(true);
+        this.buildScrubRegion();
       }
     }, { passive: false });
   }
 
   private onPointerDown(e: PointerEvent): void {
-    this.isCleaning = true;
-    this.lastPointerX = e.clientX;
-    this.lastPointerY = e.clientY;
-    this.canvas.setPointerCapture(e.pointerId);
     this.scrubAtPointer(e);
     this.updateProgressFromDirt();
   }
 
   private onPointerMove(e: PointerEvent): void {
-    if (!this.isCleaning) return;
+    // Menggosok TANPA tombol ditekan: pointermove langsung menggosok selama
+    // pointer berada di scrub region (filter region dilakukan di scrubAtPointer).
     this.scrubAtPointer(e);
     this.updateProgressFromDirt();
-  }
-
-  private onPointerUp(): void {
-    this.isCleaning = false;
   }
 
   // ---------------------------------------------------------------------------
@@ -597,7 +786,7 @@ export class CarrotCleaner {
       if (!this.cleanCompleteFired) {
         this.cleanCompleteFired = true;
         this.options.onCleanComplete?.();
-        setTimeout(() => this.close(), 1000);
+        setTimeout(() => this.close(), 1000); 
       }
     } else {
       this.statusElement.textContent = `Bersih: ${pct}% - Gosok untuk membersihkan...`;
@@ -620,6 +809,9 @@ export class CarrotCleaner {
     }
     if (this.renderer) {
       this.renderer.setSize(w, h);
+    }
+    if (this.carrotGroup) {
+      this.buildScrubRegion();
     }
     console.log('[CarrotCleaner] resize ->', w, 'x', h);
   }

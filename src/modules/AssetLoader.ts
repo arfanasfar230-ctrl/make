@@ -449,12 +449,15 @@ export class AssetLoader {
         continue;
       }
 
+      if (groupNode.name === 'G_10') {
+        this.markSinkInteractive(groupNode, ctx);
+        continue;
+      }
+
       this.pushInteractive(ctx, groupNode, combinedBox, category);
 
       // Apply specific interactions to named objects
-      if (groupNode.name === 'G_10') {
-        this.markSinkInteractive(groupNode, ctx);
-      } else if (groupNode.name === 'G_1') {
+      if (groupNode.name === 'G_1') {
         this.markWindowInteractive(groupNode, 'Kabinet Dapur');
       }
     }
@@ -659,6 +662,8 @@ export class AssetLoader {
 
     let created = false;
     for (const [category, info] of subcats) {
+      if (category === 'prep_area' || category === 'counter') continue;
+
       let box = info.box;
 
       // Fixtures reach the work front only through the countertop they sit on.
