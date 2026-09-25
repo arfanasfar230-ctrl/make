@@ -24,6 +24,9 @@ const GLB_BASE = (() => {
   }
 })();
 
+// Jeda setelah kran dinyalakan sebelum popup membersihkan wortel muncul.
+const CARROT_CLEAN_DELAY_MS = 4300;
+
 class KitchenErgonomicsApp {
   private renderer!: THREE.WebGLRenderer;
   private scene!: THREE.Scene;
@@ -45,6 +48,8 @@ class KitchenErgonomicsApp {
   private doorTeleport!: DoorTeleportSystem;
   private proximityTeleport!: ProximityTeleportSystem;
   private carrotCleaner!: CarrotCleaner;
+  private carrotCleanSucceeded = false;
+  private faucetCarrotTimer: ReturnType<typeof setTimeout> | null = null;
 
   private currentMode: GameMode = 'desktop';
   private isRunning = false;
@@ -293,9 +298,16 @@ kitchenModel: null,
       this.carrotCleaner = new CarrotCleaner(this.ctx, {
         onCleanComplete: () => {
           console.log('Carrot cleaning complete!');
+          this.carrotCleanSucceeded = true;
         },
         onClose: () => {
           console.log('Carrot cleaner closed');
+          // Setelah selesai membersihkan, kembalikan ke popup opsi kran
+          // supaya player bisa mematikan kran.
+          if (this.carrotCleanSucceeded) {
+            this.carrotCleanSucceeded = false;
+            this.showInteractionPanel();
+          }
         }
       });
 
@@ -829,21 +841,17 @@ kitchenModel: null,
       title.textContent = 'Kran Wastafel';
       const isOpen = this.interaction.isFaucetOpen();
 
-      const cleanBtn = document.createElement('button');
-      cleanBtn.className = 'interaction-option-btn';
-      cleanBtn.textContent = '🥕 Bersihkan Wortel';
-      cleanBtn.addEventListener('click', () => {
-        this.hideInteractionPanel();
-        this.carrotCleaner.open();
-      });
-      this.interactionPanelOptions.appendChild(cleanBtn);
-
       const toggleBtn = document.createElement('button');
       toggleBtn.className = 'interaction-option-btn';
       toggleBtn.textContent = isOpen ? 'Matikan Kran' : 'Nyalakan Kran';
       toggleBtn.addEventListener('click', () => {
         this.interaction.tryInteract();
         this.hideInteractionPanel();
+        // Setelah kran menyala, aus popup pembersih wortel muncul beberapa
+        // detik kemudian.
+        if (this.interaction.isFaucetOpen()) {
+          this.scheduleCarrotCleanPrompt();
+        }
       });
       this.interactionPanelOptions.appendChild(toggleBtn);
     } else if (hoverType === 'window') {
@@ -873,6 +881,18 @@ kitchenModel: null,
   private hideInteractionPanel(): void {
     this.interactionPanel.style.display = 'none';
     this.interactionPanelOptions.innerHTML = '';
+  }
+
+  /**
+   * Setelah kran dinyalakan, munculkan popup pembersihan wortel setelah
+   * jeda CARROT_CLEAN_DELAY_MS (4,3 detik).
+   */
+  private scheduleCarrotCleanPrompt(): void {
+    if (this.faucetCarrotTimer !== null) clearTimeout(this.faucetCarrotTimer);
+    this.faucetCarrotTimer = setTimeout(() => {
+      this.faucetCarrotTimer = null;
+      if (!this.carrotCleaner?.isOpened()) this.carrotCleaner.open();
+    }, CARROT_CLEAN_DELAY_MS);
   }
 
   private showErgonomics(obj: InteractiveObject): void {
