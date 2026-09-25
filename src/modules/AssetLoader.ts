@@ -287,6 +287,13 @@ export class AssetLoader {
     // collision, window interactables) never sees it.
     this.removeModelNode(model, 'G_1');
 
+    // `_ra2` (Mesh10) is the decorative prep cluster of jar/bottle fixtures on
+    // the long G_121 worktop. It is stripped from the scene so those containers
+    // no longer appear in the game. Removal before analysis keeps them out of
+    // bbox, collision and interactive systems while leaving the G_121 worktop
+    // slab (Mesh11) and the sink `_ra1` fully intact.
+    this.removeModelNode(model, '_ra2');
+
     const box = new THREE.Box3().setFromObject(model);
     ctx.sceneBoundingBox = box;
     ctx.floorY = box.min.y;

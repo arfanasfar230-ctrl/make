@@ -27,6 +27,26 @@ const GLB_BASE = (() => {
 // Jeda setelah kran dinyalakan sebelum popup membersihkan wortel muncul.
 const CARROT_CLEAN_DELAY_MS = 4300;
 
+// Panci dekoratif di atas Meja Kerja Dapur 3 (G_8). X/Z adalah posisi world
+// target; Y ditentukan lewat raycast ke bawah agar dasar panci tepat di
+// permukaan meja (G_8), bukan di backsplash. Versi baru lebih kecil (0.19 m).
+const PAN_GLB = `${GLB_BASE}panci.glb`;
+const PAN_TARGET_X = 19.1;
+const PAN_TARGET_Z = 4.4;
+const PAN_TARGET_HEIGHT_M = 0.19;
+
+// Set penyajian dekoratif (public/low_poly_tableware.glb) di atas worktop
+// G_121, di area bekas klaster bumbu (_ra2/Mesh10 yang sudah dihapus). X/Z
+// adalah posisi world; Y ditentukan lewat raycast ke bawah (findTableSurfaceY)
+// agar dasar placemat menempel persis di permukaan slab (Mesh11, y≈8.8).
+// Skala dinormalisasi ke diameter piring (anchor Dish) 0.20 m; jika mesh
+// piring tidak ditemukan, fallback ke lebar placemat (0.334 m).
+const SAJI_GLB = `${GLB_BASE}low_poly_tableware.glb`;
+const SAJI_TARGET_X = 12.59;
+const SAJI_TARGET_Z = 3.45;
+const SAJI_TARGET_WIDTH_M = 0.2; // diameter piring target (anchor Dish)
+const SAJI_FALLBACK_WIDTH_M = 0.334; // lebar placemat target bila Dish tak ada
+
 class KitchenErgonomicsApp {
   private renderer!: THREE.WebGLRenderer;
   private scene!: THREE.Scene;
@@ -316,6 +336,10 @@ kitchenModel: null,
 
       await this.loadFridge();
 
+      await this.loadPan();
+
+      await this.loadServingSet();
+
       this.player = new PlayerController(this.ctx);
       this.debugSystem = new DebugSystem(this.ctx);
 
@@ -488,6 +512,150 @@ kitchenModel: null,
         this.furnitureMove.startMoving(fridgeObj);
       }
     };
+  }
+
+  /**
+   * World Y dari permukaan pertama yang terlihat tepat di bawah (x, z).
+   * Dipakai untuk mendudukkan panci di atas permukaan meja yang benar (G_8),
+   * bukan nilai `surfaceY` hasil normalisasi yang bisa menunjuk ke backsplash.
+   */
+  private findTableSurfaceY(x: number, z: number): number {
+    const model = this.ctx.kitchenModel;
+    if (!model) return this.ctx.floorY;
+    const raycaster = new THREE.Raycaster(
+      new THREE.Vector3(x, 12, z),
+      new THREE.Vector3(0, -1, 0),
+      0,
+      100
+    );
+    const hits = raycaster.intersectObject(model, true);
+    for (const hit of hits) {
+      if (hit.object.visible && hit.distance > 1e-4) {
+        return hit.point.y;
+      }
+    }
+    return this.ctx.floorY;
+  }
+
+  /**
+   * Memuat panci GLB dan mendudukkannya di atas Meja Kerja Dapur 3 (G_8).
+   * Hanya dekorasi: tanpa hitbox, tanpa interaksi. Skala dinormalisasi ke
+   * tinggi nyata (PAN_TARGET_HEIGHT_M) dan posisi Y dihitung dari raycast
+   * ke bawah di titik target sehingga dasar panci menyentuh permukaan meja
+   * tanpa melayang atau menembus.
+   */
+  private async loadPan(): Promise<void> {
+    const loader = new GLTFLoader();
+    const gltf = await loader.loadAsync(PAN_GLB);
+    const pan = gltf.scene;
+
+    pan.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+      }
+    });
+
+    pan.updateMatrixWorld(true);
+    const bbox = new THREE.Box3().setFromObject(pan);
+    const size = new THREE.Vector3();
+    bbox.getSize(size);
+
+    const currentHeightM = size.y / this.ctx.sceneScale;
+    let scale = PAN_TARGET_HEIGHT_M / Math.max(currentHeightM, 1e-6);
+    if (!Number.isFinite(scale) || scale <= 0) scale = 1;
+    pan.scale.setScalar(scale);
+
+    pan.updateMatrixWorld(true);
+    const scaledBBox = new THREE.Box3().setFromObject(pan);
+
+    const surfaceY = this.findTableSurfaceY(PAN_TARGET_X, PAN_TARGET_Z);
+    pan.position.set(PAN_TARGET_X, surfaceY - scaledBBox.min.y, PAN_TARGET_Z);
+    pan.name = 'panci';
+
+    if (this.ctx.kitchenModel) {
+      this.ctx.kitchenModel.add(pan);
+    } else {
+      this.ctx.scene.add(pan);
+    }
+  }
+
+  /**
+   * Memuat set penyajian (low_poly_tableware.glb) dan mendudukkannya di area
+   * bekas klaster bumbu (worktop G_121). Hanya dekorasi: tanpa hitbox, tanpa
+   * interaksi. Skala dinormalisasi ke diameter piring target
+   * (SAJI_TARGET_WIDTH_M = 0.20 m) memakai mesh piring (Dish) sebagai anchor;
+   * bila mesh piring tidak ditemukan, fallback ke lebar placemat
+   * (SAJI_FALLBACK_WIDTH_M). Posisi Y dihitung dari raycast ke bawah
+   * (findTableSurfaceY) sehingga dasar placemat menempel persis di permukaan
+   * slab (Mesh11, y≈8.8). Rotation Y = 0 sesuai orientasi asli asset.
+   */
+  private async loadServingSet(): Promise<void> {
+    const loader = new GLTFLoader();
+    const gltf = await loader.loadAsync(SAJI_GLB);
+    const set = gltf.scene;
+
+    set.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+      }
+    });
+
+    set.updateMatrixWorld(true);
+
+    // Perbaiki HANYA z-fighting pada alas placemat: plane `Mat_24_-_Default_0`
+    // persis sebidang dengan top slab (keduanya di y=8.8) sehingga berkedip/
+    // kabur saat kamera bergerak. Diberi bias depth render-time (polygon
+    // offset) pada mesh alas saja. Appearance material asli GLB (color, map,
+    // normalMap, metalness, roughness, opacity) tidak diubah sama sekali.
+    const matNode = set.getObjectByName('Mat_24_-_Default_0');
+    if (matNode) {
+      const matMat = (matNode as THREE.Mesh).material as THREE.MeshStandardMaterial;
+      matMat.polygonOffset = true;
+      matMat.polygonOffsetFactor = -1;
+      matMat.polygonOffsetUnits = -1;
+    }
+
+    let anchorWorld: number | null = null;
+    const dish = set.getObjectByName('Dish_09_-_Default_0');
+    if (dish) {
+      const dishBox = new THREE.Box3().setFromObject(dish);
+      const dishSize = new THREE.Vector3();
+      dishBox.getSize(dishSize);
+      anchorWorld = Math.max(dishSize.x, dishSize.z);
+    }
+
+    const bbox = new THREE.Box3().setFromObject(set);
+    const size = new THREE.Vector3();
+    bbox.getSize(size);
+
+    let scale: number;
+    if (anchorWorld !== null) {
+      const currentDishM = anchorWorld / this.ctx.sceneScale;
+      scale = SAJI_TARGET_WIDTH_M / Math.max(currentDishM, 1e-6);
+    } else {
+      const currentWidthM = size.x / this.ctx.sceneScale;
+      scale = SAJI_FALLBACK_WIDTH_M / Math.max(currentWidthM, 1e-6);
+    }
+    if (!Number.isFinite(scale) || scale <= 0) scale = 1;
+    set.scale.setScalar(scale);
+
+    set.updateMatrixWorld(true);
+    const scaledBBox = new THREE.Box3().setFromObject(set);
+
+    const surfaceY = this.findTableSurfaceY(SAJI_TARGET_X, SAJI_TARGET_Z);
+    set.position.set(SAJI_TARGET_X, surfaceY - scaledBBox.min.y, SAJI_TARGET_Z);
+    set.rotation.y = Math.PI / 2;
+    set.name = 'meja_saji';
+
+    if (this.ctx.kitchenModel) {
+      this.ctx.kitchenModel.add(set);
+    } else {
+      this.ctx.scene.add(set);
+    }
   }
 
   private async loadJendelaG1(): Promise<void> {
