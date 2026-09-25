@@ -27,6 +27,7 @@ export class CarrotCleaner {
   private carrotMaskCanvas: HTMLCanvasElement | null = null;
   private carrotScrubRegionCanvas: HTMLCanvasElement | null = null;
   private carrotScratchCanvas: HTMLCanvasElement | null = null;
+  private raycaster: THREE.Raycaster | null = null;
 
   private cleanProgress = 0;
   private targetProgress = 0;
@@ -301,9 +302,10 @@ export class CarrotCleaner {
   /**
    * Builds the SCREEN-SPACE scrub region used as the "batas gosok": the union
    * of every projected triangle of the carrot (the silhouette as seen by the
-   * camera), then dilated by a small tolerance (~40px layar) so brushing near,
-   * but not exactly on, the carrot still counts. Pixels outside this region
-   * never erase dirt / never add progress. No UV∩screen mixing is needed.
+   * camera), WITHOUT dilation — hanya area model (siluet) persis yang dihitung.
+   * Pixels outside this region never erase dirt / never add progress.
+   * Segitiga dengan vertex di belakang kamera (NDC z di luar [-1, 1]) dilewati
+   * supaya tidak menghasilkan pixel region dari proyeksi terbalik.
    */
   private buildScrubRegion(): void {
     const W = 512;
@@ -333,7 +335,7 @@ export class CarrotCleaner {
       const toScreen = (i: number) => {
         tmp.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld);
         tmp.project(this.camera);
-        return { x: (tmp.x * 0.5 + 0.5) * W, y: (0.5 - tmp.y * 0.5) * H };
+        return { x: (tmp.x * 0.5 + 0.5) * W, y: (0.5 - tmp.y * 0.5) * H, z: tmp.z };
       };
 
       const count = index ? Math.floor(index.count / 3) : Math.floor(pos.count / 3);
@@ -344,6 +346,10 @@ export class CarrotCleaner {
         const pa = toScreen(a);
         const pb = toScreen(b);
         const pc = toScreen(c);
+        // Skip segitiga yang ada vertex-nya di belakang kamera / di luar near-far
+        // (NDC z di luar [-1, 1]) supaya proyeksinya tidak "terbalik" dan
+        // menimbulkan pixel region di luar area model.
+        if (pa.z < -1 || pa.z > 1 || pb.z < -1 || pb.z > 1 || pc.z < -1 || pc.z > 1) continue;
         sctx.moveTo(pa.x, pa.y);
         sctx.lineTo(pb.x, pb.y);
         sctx.lineTo(pc.x, pc.y);
@@ -352,23 +358,9 @@ export class CarrotCleaner {
     });
     sctx.fill();
 
-    // Dilasi siluet dengan toleransi gosok (dalam piksel canvas 512).
-    const cssH = this.canvas.clientHeight || 400;
-    const tol = Math.max(2, Math.round(40 * (H / cssH)));
-    const step = Math.max(1, Math.round(tol / 3));
-
-    const region = document.createElement('canvas');
-    region.width = W;
-    region.height = H;
-    const rctx = region.getContext('2d')!;
-    rctx.clearRect(0, 0, W, H);
-    for (let dy = -tol; dy <= tol; dy += step) {
-      for (let dx = -tol; dx <= tol; dx += step) {
-        rctx.drawImage(silhouette, dx, dy);
-      }
-    }
-
-    this.carrotScrubRegionCanvas = region;
+    // TANPA dilasi: region = siluet wortel persis (toleransi 0), sehingga
+    // hitbox pembersihan hanya tepat pada area model.
+    this.carrotScrubRegionCanvas = silhouette;
   }
 
   private drawDirtPattern(): void {
@@ -566,15 +558,18 @@ export class CarrotCleaner {
     root.position.set(0, 0, 0);
     root.rotation.set(0, 0, 0);
     root.scale.set(1, 1, 1);
+
+    // Baringkan wortel: arah panjang model (sumbu +Z, tempat ujung terluar)
+    // diputar ke sumbu +X sehingga tampil memanjang kiri-kanan di layar.
+    root.rotation.set(0, Math.PI / 2, 0);
     root.updateMatrixWorld(true);
 
-    const box2 = new THREE.Box3().setFromObject(root);
-    const center2 = box2.getCenter(new THREE.Vector3());
-    root.position.sub(center2);
-
+    // Skala dulu baru center-ulang, supaya pusat model tepat di origin
+    // (offset tidak boleh dikurangkan sebelum skala — itu menyebabkan model
+    // terpental keluar frame dan siluet gosok tak bertepatan dengan pointer).
     const maxDimension = Math.max(size.x, size.y, size.z);
-    const targetSize = 1.5 * 20; // diperbesar 20x
-    const scale = maxDimension > 0 ? targetSize / maxDimension : 20;
+    const targetSize = 1.5 * 20 * 20; // skala dunia model 20x lagi (30 -> 600)
+    const scale = maxDimension > 0 ? targetSize / maxDimension : 1;
     root.scale.setScalar(scale);
     console.log('[CarrotCleaner] scale:', scale);
 
@@ -582,23 +577,28 @@ export class CarrotCleaner {
 
     const fittedBox = new THREE.Box3().setFromObject(root);
     const fittedCenter = fittedBox.getCenter(new THREE.Vector3());
+    root.position.sub(fittedCenter);
+    root.updateMatrixWorld(true);
+
     const fittedSize = fittedBox.getSize(new THREE.Vector3());
     const maxFitted = Math.max(fittedSize.x, fittedSize.y, fittedSize.z);
 
+    // Framming: wortel mengisi ±65% tinggi canvas modal. Kamera tetap di LUAR
+    // model sehingga proyeksi siluet & gosokan valid (tidak masuk ke dalam mesh).
+    const PCT = 0.65;
     const fovRadians = THREE.MathUtils.degToRad(this.camera.fov);
-    // Distance dijaga tetap menyesuaikan ukuran model yg membesar
-    // sehingga wortel tampak besar tapi masih dalam frame.
-    const distance = (maxFitted / 2) / Math.tan(fovRadians / 2) * 1.05;
+    const distance = (maxFitted / 2) / Math.tan(fovRadians / 2) / PCT;
 
-    this.camera.position.set(0, maxFitted * 0.12, distance);
-    this.camera.lookAt(fittedCenter);
+    this.camera.position.set(0, maxFitted * 0.05, distance);
+    this.camera.lookAt(0, 0, 0);
+    this.camera.near = Math.max(0.001, distance * 0.01);
+    this.camera.far = distance + maxFitted;
     this.camera.updateProjectionMatrix();
     // Pastikan matrixWorld/matrixWorldInverse kamera ter-update SEBELUM
     // masking/proyeksi dihitung (tanpa ini proyeksi memakai matrix identity).
     this.camera.updateMatrixWorld(true);
 
     console.log('[CarrotCleaner] camera position:', this.camera.position.toArray().map(v => v.toFixed(3)).join(', '));
-    console.log('[CarrotCleaner] camera lookAt:', fittedCenter.toArray().map(v => v.toFixed(3)).join(', '));
     console.log('[CarrotCleaner] camera fov:', this.camera.fov, '| near:', this.camera.near, '| far:', this.camera.far);
     console.log('[CarrotCleaner] model position:', root.position.toArray().map(v => v.toFixed(3)).join(', '), '| scale:', root.scale.toArray().map(v => v.toFixed(3)).join(', '));
   }
@@ -623,15 +623,9 @@ export class CarrotCleaner {
     const x = ((e.clientX - rect.left) / rect.width) * this.dirtCanvas.width;
     const y = ((e.clientY - rect.top) / rect.height) * this.dirtCanvas.height;
 
-    // Batas gosok = siluet wortel di layar + toleransi. Di luar area tersebut
-    // gosokan TIDAK dihitung (tidak erase, tidak menambah progress).
-    const region = this.carrotScrubRegionCanvas;
-    if (region) {
-      const px = Math.max(0, Math.min(this.dirtCanvas.width - 1, Math.round(x)));
-      const py = Math.max(0, Math.min(this.dirtCanvas.height - 1, Math.round(y)));
-      const alpha = region.getContext('2d')!.getImageData(px, py, 1, 1).data[3];
-      if (alpha === 0) return;
-    }
+    // Hitbox = persis bentuk wortel: raycast pointer ke mesh wortel (base,
+    // bukan overlay _dirt). Tanpa hit pada permukaan model → gosokan diabaikan.
+    if (!this.isPointerOnCarrot(e, rect)) return;
 
     const brushRadius = 22 * (window.devicePixelRatio || 1);
 
@@ -678,6 +672,32 @@ export class CarrotCleaner {
     }
 
     this.dirtTexture.needsUpdate = true;
+  }
+
+  /**
+   * Hitbox pembersihan = persis area permukaan model wortel. Pointer dikonversi
+   * ke NDC lalu di-raycast ke mesh dasar wortel (overlay _dirt dikecualikan).
+   * Tanpa intersect → pointer tidak berada di atas model → gosokan diabaikan.
+   */
+  private isPointerOnCarrot(e: PointerEvent, rect: DOMRect): boolean {
+    if (!this.carrotGroup || !this.camera) return false;
+    if (!this.raycaster) this.raycaster = new THREE.Raycaster();
+
+    const ndc = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(ndc, this.camera);
+
+    const targets: THREE.Mesh[] = [];
+    this.carrotGroup.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      if (mesh.name.endsWith('_dirt')) return;
+      targets.push(mesh);
+    });
+
+    return this.raycaster.intersectObjects(targets, false).length > 0;
   }
 
   private updateProgressFromDirt(): void {
