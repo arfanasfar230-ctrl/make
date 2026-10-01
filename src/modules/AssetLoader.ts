@@ -36,7 +36,7 @@ const GROUP_CATEGORY: Record<string, KitchenObjectCategory | 'skip'> = {
   G_7: 'counter',
   G_8: 'counter',
   G_9: 'counter',
-  G_10: 'counter',
+  G_10: 'stove',       // kompor
   G_16: 'counter',
   G_17: 'counter',
   G_118: 'counter',
@@ -456,11 +456,6 @@ export class AssetLoader {
 
       if (groupNode.name === 'G_121') {
         this.buildG121Details(groupNode, combinedBox, ctx);
-        continue;
-      }
-
-      if (groupNode.name === 'G_10') {
-        this.markSinkInteractive(groupNode, ctx);
         continue;
       }
 

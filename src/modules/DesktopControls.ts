@@ -213,6 +213,10 @@ export class DesktopControls {
     return this.isPointerLocked;
   }
 
+  public requestPointerLock(): void {
+    this.tryRequestPointerLock();
+  }
+
   public dispose(): void {
     // Listeners are global and cleaned up with the page
   }

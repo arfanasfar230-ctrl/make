@@ -15,6 +15,7 @@ import { FurnitureMoveSystem } from './modules/FurnitureMoveSystem';
 import { DoorTeleportSystem } from './modules/DoorTeleportSystem';
 import { ProximityTeleportSystem } from './modules/ProximityTeleportSystem';
 import { CarrotCleaner } from './modules/CarrotCleaner';
+import { StoveFireMinigame } from './modules/StoveFireMinigame';
 
 const GLB_BASE = (() => {
   try {
@@ -83,6 +84,7 @@ class KitchenErgonomicsApp {
   private doorTeleport!: DoorTeleportSystem;
   private proximityTeleport!: ProximityTeleportSystem;
   private carrotCleaner!: CarrotCleaner;
+  private stoveFireMinigame!: StoveFireMinigame;
   private carrotCleanSucceeded = false;
   private faucetCarrotTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -342,6 +344,18 @@ kitchenModel: null,
           if (this.carrotCleanSucceeded) {
             this.carrotCleanSucceeded = false;
             this.showInteractionPanel();
+          }
+        }
+      });
+
+      this.stoveFireMinigame = new StoveFireMinigame(this.ctx, {
+        onSuccess: () => {
+          console.log('Stove fire minigame completed!');
+        },
+        onClose: () => {
+          console.log('Stove fire minigame closed');
+          if (this.currentMode === 'desktop' && this.desktopControls) {
+            this.desktopControls.requestPointerLock();
           }
         }
       });
@@ -833,6 +847,8 @@ kitchenModel: null,
       if (e.code === 'Escape') {
         if (this.carrotCleaner?.isOpened()) {
           this.carrotCleaner.close();
+        } else if (this.stoveFireMinigame?.isOpened()) {
+          this.stoveFireMinigame.close();
         } else {
           this.hideErgonomics();
           this.hideInteractionPanel();
@@ -854,8 +870,18 @@ kitchenModel: null,
         // crosshair saat pointer terkunci.
         if (this.fridgeInteraction?.isFridgeHovered()) {
           this.fridgeInteraction.toggleFridgeDoor();
-        } else if (this.interaction?.getHover()) {
-          this.showInteractionPanel();
+        } else {
+          const hover = this.interaction?.getHover();
+          const hoverType = this.interaction?.getHoverType?.();
+          const hitboxObj = this.hitboxTargetObj;
+          if (hitboxObj && hitboxObj.category === 'other' && hitboxObj.name === 'panci') {
+            if (!this.stoveFireMinigame?.isOpened()) {
+              document.exitPointerLock();
+              this.stoveFireMinigame.open();
+            }
+          } else if (hover && hoverType && hoverType !== 'none') {
+            this.showInteractionPanel();
+          }
         }
       }
     });
@@ -1287,6 +1313,8 @@ kitchenModel: null,
       let hint = '';
       if (nearest.category === 'fridge') {
         hint = '[F] Buka/Tutup Pintu';
+      } else if (nearest.category === 'other' && nearest.name === 'panci') {
+        hint = '[F] Atur Level Api';
       } else if (analyzable) {
         hint = 'Klik: Analisis';
       }
