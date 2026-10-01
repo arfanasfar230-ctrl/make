@@ -33,10 +33,17 @@ export interface InteractiveObject {
   surfaceY: number;
   /**
    * Whether the object can be picked up / moved / rotated via the furniture
-   * move system and highlighted with the move hitbox. Built-in fixtures
-   * (wall cabinets, base cabinetry) are visible but should stay fixed.
+   * move system. Built-in fixtures (wall cabinets, base cabinetry) are visible
+   * but should stay fixed.
    */
   movable: boolean;
+  /**
+   * Whether the object gets the blue aim hitbox when looked at. Defaults to
+   * `movable` when omitted. Decoupled from `movable` because a fixture can stay
+   * fixed yet still be a valid aim target (e.g. the sink), and because the big
+   * work counters are movable yet deliberately not highlighted.
+   */
+  hitbox?: boolean;
 }
 
 export type KitchenObjectCategory =
@@ -80,6 +87,11 @@ export interface ControlInput {
   lookX: number;
   lookY: number;
   interact: boolean;
+  /**
+   * True when `interact` came from the [E] key specifically. Lets a panel keep
+   * working for klik / tombol sentuh / trigger VR while the [E] key is ignored.
+   */
+  interactKey?: boolean;
   rotateInput?: number;
   rotateWheelDelta?: number;
   rotateSnap?: boolean;

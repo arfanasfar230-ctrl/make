@@ -18,7 +18,7 @@ export class DesktopControls {
   private isPointerLocked: boolean = false;
   private lockSupported: boolean;
   private pendingInteract: boolean = false;
-  private pendingMoveToggle: boolean = false;
+  private pendingInteractKey: boolean = false;
   private pendingRotateSnap: boolean = false;
   private pendingPlace: boolean = false;
   private pendingCancel: boolean = false;
@@ -51,13 +51,11 @@ export class DesktopControls {
 
       if (e.code === 'KeyE') {
         this.pendingInteract = true;
+        this.pendingInteractKey = true;
       }
       if (e.code === 'Space' || e.code === 'Enter') {
         this.pendingInteract = true;
         this.pendingPlace = true;
-      }
-      if (e.code === 'KeyG') {
-        this.pendingMoveToggle = true;
       }
       if (e.code === 'KeyR') {
         this.pendingRotateSnap = true;
@@ -186,10 +184,10 @@ export class DesktopControls {
       lookX: this.lookX,
       lookY: this.lookY,
       interact: this.pendingInteract,
+      interactKey: this.pendingInteractKey,
       rotateInput,
       rotateWheelDelta: this.rotateWheelDelta,
       rotateSnap: this.pendingRotateSnap,
-      moveToggle: this.pendingMoveToggle,
       placeItem: this.pendingPlace,
       cancelMove: this.pendingCancel,
     };
@@ -197,7 +195,7 @@ export class DesktopControls {
     this.lookX = 0;
     this.lookY = 0;
     this.pendingInteract = false;
-    this.pendingMoveToggle = false;
+    this.pendingInteractKey = false;
     this.pendingRotateSnap = false;
     this.pendingPlace = false;
     this.pendingCancel = false;

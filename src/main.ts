@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import type { GameMode, SceneContext, ControlInput, InteractiveObject } from './modules/types';
+import type { GameMode, SceneContext, ControlInput, InteractiveObject, KitchenObjectCategory } from './modules/types';
 import { AssetLoader } from './modules/AssetLoader';
 import { PlayerController } from './modules/PlayerController';
 import { DesktopControls } from './modules/DesktopControls';
@@ -27,6 +27,12 @@ const GLB_BASE = (() => {
 // Jeda setelah kran dinyalakan sebelum popup membersihkan wortel muncul.
 const CARROT_CLEAN_DELAY_MS = 4300;
 
+// Objek yang tidak punya analisis ergonomi lewat tombol [E]. Kulkas, wastafel,
+// dan kompor hanya punya interaksi lewat [F] atau klik, sedangkan jendela punya
+// animasi buka-tutup sendiri. Semua objek lain (meja kerja, area persiapan,
+// panci) tetap bisa dianalisis dengan [E].
+const NON_ANALYZABLE_CATEGORIES = new Set<KitchenObjectCategory>(['sink', 'stove', 'fridge']);
+
 // Panci dekoratif di atas Meja Kerja Dapur 3 (G_8). X/Z adalah posisi world
 // target; Y ditentukan lewat raycast ke bawah agar dasar panci tepat di
 // permukaan meja (G_8), bukan di backsplash. Versi baru lebih kecil (0.19 m).
@@ -34,6 +40,15 @@ const PAN_GLB = `${GLB_BASE}panci.glb`;
 const PAN_TARGET_X = 19.1;
 const PAN_TARGET_Z = 4.4;
 const PAN_TARGET_HEIGHT_M = 0.19;
+
+// Kulkas (public/kulkas.glb) adalah objek tetap: posisinya dikunci di koordinat
+// ini dan tidak bisa digeser/diputar pemain (tombol Pindah hanya untuk perabot lain).
+// X/Z adalah koordinat world yang diminta; Y tetap diturunkan dari floorY agar
+// dasar kulkas menempel lantai. Sisi pintu pada model ada di +Z lokal, jadi
+// kulkas diputar menghadap lurus (kelipatan 90°) ke tembok tempat wastafel
+// berada — objek kategori 'sink' hanya dipakai sebagai penentu arah tembok.
+const FRIDGE_TARGET_X = 10.85;
+const FRIDGE_TARGET_Z = 29.08;
 
 // Set penyajian dekoratif (public/low_poly_tableware.glb) di atas worktop
 // G_121, di area bekas klaster bumbu (_ra2/Mesh10 yang sudah dihapus). X/Z
@@ -472,11 +487,22 @@ kitchenModel: null,
     fridgeModel.updateMatrixWorld(true);
     const scaledBBox = new THREE.Box3().setFromObject(fridgeModel);
 
-    const targetX = 24.29;
-    const targetZ = 31.89;
+    const targetX = FRIDGE_TARGET_X;
+    const targetZ = FRIDGE_TARGET_Z;
     const targetY = this.ctx.floorY - scaledBBox.min.y;
 
     fridgeModel.position.set(targetX, targetY, targetZ);
+
+    // Pintu kulkas berada di sisi +Z model. Arah ke wastafel hanya dipakai
+    // sebagai penentu tembok mana yang dihadap, lalu di-snap ke kelipatan 90
+    // derajat supaya kulkas menghadap lurus ke tembok itu, tidak miring.
+    const sink = this.ctx.interactiveObjects.find((obj) => obj.category === 'sink');
+    if (sink) {
+      const toSink = Math.atan2(sink.center.x - targetX, sink.center.z - targetZ);
+      const quarterTurn = Math.PI / 2;
+      fridgeModel.rotation.y = Math.round(toSink / quarterTurn) * quarterTurn;
+    }
+
     fridgeModel.name = 'kulkas';
     fridgeModel.userData.isFridge = true;
 
@@ -501,17 +527,12 @@ kitchenModel: null,
       center: finalCenter.clone(),
       height: finalSize.y,
       surfaceY: finalBox.max.y,
-      movable: true,
+      // Kulkas terkunci di posisinya: hanya interaksi buka/tutup pintu ([F]).
+      movable: false,
     });
 
     this.fridgeInteraction = new FridgeInteractionSystem(this.ctx, this.collision);
     await this.fridgeInteraction.initialize(fridgeModel, gltf.animations);
-    this.fridgeInteraction.onMoveRequested = () => {
-      const fridgeObj = this.ctx.interactiveObjects.find((o) => o.name === 'kulkas');
-      if (fridgeObj && this.furnitureMove) {
-        this.furnitureMove.startMoving(fridgeObj);
-      }
-    };
   }
 
   /**
@@ -539,10 +560,11 @@ kitchenModel: null,
 
   /**
    * Memuat panci GLB dan mendudukkannya di atas Meja Kerja Dapur 3 (G_8).
-   * Hanya dekorasi: tanpa hitbox, tanpa interaksi. Skala dinormalisasi ke
-   * tinggi nyata (PAN_TARGET_HEIGHT_M) dan posisi Y dihitung dari raycast
-   * ke bawah di titik target sehingga dasar panci menyentuh permukaan meja
-   * tanpa melayang atau menembus.
+   * Skala dinormalisasi ke tinggi nyata (PAN_TARGET_HEIGHT_M) dan posisi Y
+   * dihitung dari raycast ke bawah di titik target sehingga dasar panci
+   * menyentuh permukaan meja tanpa melayang atau menembus. Panci didaftarkan
+   * sebagai objek interaktif: ada hitbox biru, bisa dianalisis ergonomi, dan
+   * bisa dipindah lewat tombol "Pindah & Putar".
    */
   private async loadPan(): Promise<void> {
     const loader = new GLTFLoader();
@@ -579,6 +601,28 @@ kitchenModel: null,
     } else {
       this.ctx.scene.add(pan);
     }
+
+    pan.updateMatrixWorld(true);
+    const panBox = new THREE.Box3().setFromObject(pan);
+    const panCenter = new THREE.Vector3();
+    panBox.getCenter(panCenter);
+    const panSize = new THREE.Vector3();
+    panBox.getSize(panSize);
+
+    this.ctx.interactiveObjects.push({
+      name: 'panci',
+      displayName: 'Panci',
+      category: 'other',
+      object3D: pan,
+      boundingBox: panBox.clone(),
+      center: panCenter.clone(),
+      height: panSize.y,
+      surfaceY: panBox.max.y,
+      // Panci boleh dipindah; surfaceY dipakai FurnitureMoveSystem.place()
+      // untuk memperbarui kotak pembatas setelah ditaruh.
+      movable: true,
+      hitbox: true,
+    });
   }
 
   /**
@@ -805,24 +849,13 @@ kitchenModel: null,
       }
 
       if (e.code === 'KeyF') {
-        // Check if player is gazing at the fridge (via hitbox raycast) OR fridge is hovered
-        const gazingAtFridge =
-          (this.hitboxTargetObj?.name === 'kulkas') ||
-          (this.fridgeInteraction?.isFridgeHovered());
-
-        if (this.fridgeInteraction && gazingAtFridge) {
-          // Directly toggle fridge door — no ESC / cursor needed
+        // Kulkas hanya bisa diinteraksi lewat [F] (buka/tutup pintu). Raycast
+        // hover fridge sudah membatasi jarak (INTERACTION_DISTANCE) dan memakai
+        // crosshair saat pointer terkunci.
+        if (this.fridgeInteraction?.isFridgeHovered()) {
           this.fridgeInteraction.toggleFridgeDoor();
         } else if (this.interaction?.getHover()) {
           this.showInteractionPanel();
-        }
-      }
-      // [G] key — toggle furniture move mode for nearest object
-      if (e.code === 'KeyG' && this.furnitureMove) {
-        if (this.furnitureMove.isMoving()) {
-          this.furnitureMove.cancel();
-        } else {
-          this.tryStartFurnitureMove();
         }
       }
     });
@@ -844,13 +877,19 @@ kitchenModel: null,
     });
   }
 
-  /** Try to start moving the object the player is LOOKING AT (crosshair raycast first, proximity fallback). */
+  /**
+   * Try to start moving the object the player is LOOKING AT (crosshair raycast
+   * first, proximity fallback). Dipakai oleh tombol "Pindah" di mobile dan
+   * panel ergonomi — tanpa input keyboard. Kalau tidak ada target, diam saja
+   * (tanpa notifikasi).
+   */
   private tryStartFurnitureMove(): void {
     if (!this.furnitureMove || this.furnitureMove.isMoving()) return;
 
-    // Use the hitbox-targeted object if we already computed it this frame
+    // Use the hitbox-targeted object if we already computed it this frame.
+    // Target terkunci (mis. wastafel) dilewati agar fallback proximity jalan.
     const target = this.hitboxTargetObj;
-    if (target) {
+    if (target && target.movable) {
       this.furnitureMove.startMoving(target);
       return;
     }
@@ -871,8 +910,6 @@ kitchenModel: null,
     }
     if (closest) {
       this.furnitureMove.startMoving(closest);
-    } else {
-      this.showToast('⚠️ Arahkan pandangan ke barang yang ingin dipindahkan');
     }
   }
 
@@ -889,10 +926,12 @@ kitchenModel: null,
     }
 
     const scale = Math.max(this.ctx.sceneScale, 1e-6);
-    // Collect all mesh objects from interactive objects for raycasting
+    // Collect all mesh objects from interactive objects for raycasting.
+    // `hitbox` overriding `movable`: wastafel (terkunci) tetap jadi target
+    // pembidik, meja kerja (counter) sengaja tidak.
     const candidateMeshes: THREE.Object3D[] = [];
     for (const obj of this.ctx.interactiveObjects) {
-      if (!obj.movable) continue;
+      if (!(obj.hitbox ?? obj.movable)) continue;
       obj.object3D.traverse((child) => {
         if ((child as THREE.Mesh).isMesh) candidateMeshes.push(child);
       });
@@ -933,7 +972,7 @@ kitchenModel: null,
       const closeRange = 2.2 * scale;
       let bestDot = 0.6; // must be looking roughly at it (within ~53°)
       for (const obj of this.ctx.interactiveObjects) {
-        if (!obj.movable) continue;
+        if (!(obj.hitbox ?? obj.movable)) continue;
         const toObj = new THREE.Vector3().subVectors(obj.center, playerPos);
         const dist = toObj.length();
         if (dist > closeRange) continue;
@@ -1213,7 +1252,7 @@ kitchenModel: null,
         return;
       }
 
-      // Not in move mode: check for moveToggle input ([G] key / mobile move button)
+      // Not in move mode: check for moveToggle input (tombol "Pindah" di mobile)
       if (input.moveToggle) {
         this.tryStartFurnitureMove();
       }
@@ -1241,19 +1280,25 @@ kitchenModel: null,
     const gazed = this.hitboxTargetObj;
     const nearest = gazed ?? this.ergonomics.findNearestObject(this.player.getPosition());
     if (nearest) {
+      // Tombol [E] tidak lagi dipakai untuk analisis: panel ergonomi hanya
+      // terbuka lewat klik / tombol sentuh / trigger VR. Kulkas tetap punya
+      // [F] untuk pintu, wastafel dibuka lewat kran (label crosshair hover).
+      const analyzable = !NON_ANALYZABLE_CATEGORIES.has(nearest.category);
+      let hint = '';
       if (nearest.category === 'fridge') {
-        this.promptText.textContent = `${nearest.displayName} — [E] Analisis | [F] Menu | [G] Pindah & Putar`;
-      } else if (nearest.movable) {
-        this.promptText.textContent = `${nearest.displayName} — [E] Analisis | [G] Pindah & Putar`;
-      } else {
-        this.promptText.textContent = `${nearest.displayName} — [E] Analisis`;
+        hint = '[F] Buka/Tutup Pintu';
+      } else if (analyzable) {
+        hint = 'Klik: Analisis';
       }
+      this.promptText.textContent = hint
+        ? `${nearest.displayName} — ${hint}`
+        : nearest.displayName;
       this.interactionPrompt.style.display = 'block';
 
       // Show the mobile move button only when near a moveable object
       if (this.mobileControls) this.mobileControls.showMoveButton(nearest.movable);
 
-      if (input.interact) {
+      if (input.interact && !input.interactKey && analyzable) {
         this.showErgonomics(nearest);
       }
     } else {
@@ -1261,14 +1306,16 @@ kitchenModel: null,
       if (this.mobileControls) this.mobileControls.showMoveButton(false);
     }
 
-    // Crosshair-driven interaction wins over the proximity prompt.
+    // Crosshair-driven interaction wins over the proximity prompt. Panel kran
+    // dan jendela hanya dibuka lewat [F] / klik / tombol sentuh / trigger VR —
+    // tombol [E] sengaja diabaikan agar tidak membuka panel analisis.
     const hover = this.interaction.update(delta);
     if (hover) {
       const label = this.interaction.getHoverLabel?.() ?? INTERACT_PROMPT;
       this.promptText.textContent = label;
       this.interactionPrompt.style.display = 'block';
 
-      if (input.interact) {
+      if (input.interact && !input.interactKey) {
         this.showInteractionPanel();
       }
     }

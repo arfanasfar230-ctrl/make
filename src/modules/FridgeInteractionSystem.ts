@@ -4,11 +4,16 @@ import { CollisionSystem } from './CollisionSystem';
 
 export enum FridgeState {
   IDLE = 'idle',
-  MOVE = 'move',
-  ROTATE = 'rotate',
   INTERACTION_MENU = 'interaction_menu',
 }
 
+/**
+ * Interaksi kulkas yang terkunci di posisinya (objek tetap).
+ *
+ * Satu-satunya aksi pemain adalah membuka / menutup pintu kulkas lewat tombol
+ * [F], yang memutar clip animasi pintu (CINEMA_4D_Main). Tidak ada mode pindah
+ * atau putar — kulkas selalu berada di orientasi tetap, menghadap wastafel.
+ */
 export class FridgeInteractionSystem {
   private ctx: SceneContext;
   private collision: CollisionSystem;
@@ -20,13 +25,7 @@ export class FridgeInteractionSystem {
 
   private raycaster: THREE.Raycaster;
   private mouse: THREE.Vector2;
-  private movePlane: THREE.Plane;
-  private moveOffset: THREE.Vector3 = new THREE.Vector3();
-  private isDragging = false;
-  private dragStartPos: THREE.Vector3 | null = null;
 
-  private readonly FRIDGE_MOVE_SPEED = 1.0;
-  private readonly ROTATION_SPEED = Math.PI / 2;
   private readonly INTERACTION_DISTANCE = 2.5;
 
   private interactionPanel: HTMLElement | null = null;
@@ -42,7 +41,6 @@ export class FridgeInteractionSystem {
     this.collision = collision;
     this.raycaster = new THREE.Raycaster();
     this.mouse = new THREE.Vector2();
-    this.movePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   }
 
   public isFridgeHovered(): boolean {
@@ -117,7 +115,6 @@ export class FridgeInteractionSystem {
     this.fridgeCollider.max.copy(bbox.max);
   }
 
-  public onMoveRequested?: () => void;
   private isOpen = false;
 
   private checkHover(): void {
@@ -138,7 +135,7 @@ export class FridgeInteractionSystem {
     this.fridgeHovered = isHovered;
 
     if (isHovered && this.state === FridgeState.IDLE) {
-      this.showPrompt('Kulkas — [F] Buka/Tutup Pintu | [G] Pindah & Putar | [E] Analisis');
+      this.showPrompt('Kulkas — [F] Buka/Tutup Pintu | [E] Analisis');
     } else if (!isHovered && this.state === FridgeState.IDLE) {
       this.hidePrompt();
     }
@@ -158,16 +155,13 @@ export class FridgeInteractionSystem {
   }
 
   public onMouseDown(_event: MouseEvent): boolean {
-    // Movement & rotation are handled cleanly by FurnitureMoveSystem ([G] / UI button)
+    // Kulkas adalah objek tetap: klik tidak memulai mode pindah/putar.
     return false;
   }
 
   public onMouseUp(): void {
-    if (this.state === FridgeState.MOVE) {
-      this.state = FridgeState.IDLE;
-      this.isDragging = false;
-      this.dragStartPos = null;
-    }
+    // Tidak ada drag kulkas untuk dilepas; state selalu kembali IDLE.
+    this.state = FridgeState.IDLE;
   }
 
   public onKeyDown(key: string): boolean {
@@ -246,15 +240,6 @@ export class FridgeInteractionSystem {
       this.hideInteractionMenu();
     });
     this.interactionPanelOptions.appendChild(openBtn);
-
-    const moveBtn = document.createElement('button');
-    moveBtn.className = 'interaction-option-btn';
-    moveBtn.textContent = '📦 Pindah & Putar Kulkas (G)';
-    moveBtn.addEventListener('click', () => {
-      this.hideInteractionMenu();
-      this.onMoveRequested?.();
-    });
-    this.interactionPanelOptions.appendChild(moveBtn);
 
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'interaction-option-btn cancel';

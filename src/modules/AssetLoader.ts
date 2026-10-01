@@ -71,6 +71,9 @@ const G121_SUBGROUP_CATEGORY: Record<string, KitchenObjectCategory | 'skip'> = {
  * Upper wall cabinets: G_12, G_19, G_20, G_21 (main run) + G_24, G_25 (ends).
  * Base cabinet / counter wall units (lower cabinets under the worktop):
  * G_7, G_8, G_9, G_10, G_16, G_17, G_118.
+ *
+ * Wastafel (G_121 > _ra1 > Mesh9) tidak ada di daftar ini karena dinamai lewat
+ * kategori, bukan nama group — lihat cek kategori di `pushInteractive`.
  */
 const NON_MOVABLE_GROUPS = new Set<string>([
   'G_7',
@@ -757,7 +760,14 @@ export class AssetLoader {
       center: center.clone(),
       height: size.y,
       surfaceY: surfaceYOverride !== undefined ? surfaceYOverride : bbox.max.y,
-      movable: !NON_MOVABLE_GROUPS.has(obj.name),
+      // Wastafel terkunci: hanya interaksi kran (FaucetWater), tidak bisa
+      // dipindah/diputar lewat mode Pindah & Putar.
+      movable: category !== 'sink' && !NON_MOVABLE_GROUPS.has(obj.name),
+      // Hitbox biru pembidik dimatikan untuk meja kerja (counter) dan kabinet
+      // dapur: keduanya menempel tembok dan kotaknya menutupi perabot di
+      // depannya. Hitbox wastafel, kompor, area persiapan, dan panci tetap
+      // menyala walau wastafel tidak bisa dipindah.
+      hitbox: category !== 'counter' && category !== 'cabinet',
     });
   }
 
