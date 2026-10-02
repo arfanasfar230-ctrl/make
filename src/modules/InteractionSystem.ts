@@ -5,6 +5,7 @@ import { FaucetWater } from './FaucetWater';
 import { computeFaucetWaterAnchor } from './AssetLoader';
 import { FridgeInteractionSystem } from './FridgeInteractionSystem';
 import { StoveFireMinigame } from './StoveFireMinigame';
+import { ErgonomicAssessmentSystem } from './ErgonomicAssessmentSystem';
 
 export const INTERACT_PROMPT = 'klik/f untuk berinteraksi';
 
@@ -34,6 +35,7 @@ export class InteractionSystem {
   private readonly hoverEmissive = 0x1d3a4a;
   private fridgeInteraction: FridgeInteractionSystem | null = null;
   private stoveFireMinigame: StoveFireMinigame | null = null;
+  private ergonomicAssessment: ErgonomicAssessmentSystem | null = null;
 
   constructor(ctx: SceneContext) {
     this.ctx = ctx;
@@ -116,6 +118,10 @@ export class InteractionSystem {
     this.stoveFireMinigame = game;
   }
 
+  public setErgonomicAssessment(sys: ErgonomicAssessmentSystem): void {
+    this.ergonomicAssessment = sys;
+  }
+
   public getWindowSystem(): WindowSystem {
     return this.windowSystem;
   }
@@ -179,6 +185,9 @@ export class InteractionSystem {
 
   public tryInteract(): boolean {
     if (!this.hovered) return false;
+    if (this.ergonomicAssessment && this.hoveredType !== 'none' && !this.ergonomicAssessment.canInteract(this.hoveredType)) {
+      return false;
+    }
     if (this.hoveredType === 'faucet') {
       const next = this.water ? !this.water.isOpen() : !(this.hovered.userData.faucetOpen === true);
       if (this.water) this.water.setOpen(next);

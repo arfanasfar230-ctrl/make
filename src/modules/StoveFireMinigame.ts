@@ -20,7 +20,7 @@ export class StoveFireMinigame {
   private timerId: ReturnType<typeof setTimeout> | null = null;
   private animationId: number | null = null;
   private startTime: number = 0;
-  private timeLimit = 6000;
+  private timeLimit = 5000;
   private hasCompleted = false;
 
   constructor(ctx: SceneContext, options: StoveFireMinigameOptions = {}) {

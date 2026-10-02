@@ -117,6 +117,10 @@ export class FridgeInteractionSystem {
 
   private isOpen = false;
 
+  public isFridgeOpen(): boolean {
+    return this.isOpen;
+  }
+
   private checkHover(): void {
     if (!this.fridgeModel || this.state === FridgeState.INTERACTION_MENU) return;
 

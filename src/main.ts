@@ -16,6 +16,7 @@ import { DoorTeleportSystem } from './modules/DoorTeleportSystem';
 import { ProximityTeleportSystem } from './modules/ProximityTeleportSystem';
 import { CarrotCleaner } from './modules/CarrotCleaner';
 import { StoveFireMinigame } from './modules/StoveFireMinigame';
+import { ErgonomicAssessmentSystem, createErgonomicAssessmentPanel, ErgonomicAssessmentResult } from './modules/ErgonomicAssessmentSystem';
 
 const GLB_BASE = (() => {
   try {
@@ -84,6 +85,7 @@ class KitchenErgonomicsApp {
   private proximityTeleport!: ProximityTeleportSystem;
   private carrotCleaner!: CarrotCleaner;
   private stoveFireMinigame!: StoveFireMinigame;
+  private ergonomicAssessment!: ErgonomicAssessmentSystem;
   private carrotCleanSucceeded = false;
   private faucetCarrotTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -372,9 +374,25 @@ kitchenModel: null,
 
       await this.loadServingSet();
 
+      // Initialize Ergonomic Assessment System
+      this.ergonomicAssessment = new ErgonomicAssessmentSystem(this.ctx);
+      this.ergonomicAssessment.setDependencies(
+        this.fridgeInteraction,
+        this.carrotCleaner,
+        this.stoveFireMinigame,
+        this.interaction.getWindowSystem()
+      );
+      const assessmentPanel = createErgonomicAssessmentPanel();
+      document.getElementById('ergonomic-assessment-panel')!.appendChild(assessmentPanel);
+      this.ergonomicAssessment.setPanel(document.getElementById('ergonomic-assessment-panel')!);
+      this.ergonomicAssessment.setOnResultChange((result: ErgonomicAssessmentResult) => {
+        this.updateErgonomicAssessmentPanel(result);
+      });
+
       // Inject dependencies into InteractionSystem after fridge/stove are loaded
       this.interaction.setFridgeInteraction(this.fridgeInteraction);
       this.interaction.setStoveFireMinigame(this.stoveFireMinigame);
+      this.interaction.setErgonomicAssessment(this.ergonomicAssessment);
 
       this.player = new PlayerController(this.ctx);
       this.debugSystem = new DebugSystem(this.ctx);
@@ -450,6 +468,7 @@ kitchenModel: null,
 
       this.hud.style.display = 'block';
       this.debugBtn.style.display = 'block';
+      document.getElementById('ergonomic-assessment-panel')!.style.display = 'block';
 
       if (mode === 'mobile') {
         document.getElementById('controls-hint')!.style.display = 'none';
@@ -1195,6 +1214,53 @@ kitchenModel: null,
     }
   }
 
+  private updateErgonomicAssessmentPanel(result: ErgonomicAssessmentResult): void {
+    const panel = document.getElementById('ergonomic-assessment-panel') as HTMLElement;
+    if (!panel) return;
+
+    const scoreEl = panel.querySelector('#ergo-score');
+    if (scoreEl) scoreEl.textContent = `${result.score} / 100`;
+
+    const stepEl = panel.querySelector('#ergo-step');
+    const stepNames: Record<string, string> = {
+      FRIDGE: 'Buka Kulkas',
+      TAKE_CARROT: 'Ambil Wortel',
+      CLEAN_CARROT: 'Cuci Wortel',
+      WINDOW: 'Buka Jendela',
+      STOVE: 'Masak Wortel',
+      FINISHED: 'Selesai',
+    };
+    if (stepEl) stepEl.textContent = stepNames[result.currentStep] || result.currentStep;
+
+    const distanceEl = panel.querySelector('#ergo-distance');
+    if (distanceEl) distanceEl.textContent = `${result.distance.toFixed(2)} m`;
+
+    const distanceStatusEl = panel.querySelector('#ergo-distance-status') as HTMLElement;
+    if (distanceStatusEl) {
+      const statusMap: Record<string, { text: string; color: string }> = {
+        tooClose: { text: '✕ Terlalu Dekat', color: '#f44336' },
+        ergonomic: { text: '✓ Ergonomis', color: '#4caf50' },
+        tooFar: { text: '✕ Terlalu Jauh', color: '#ff9800' },
+      };
+      const status = statusMap[result.distanceStatus] || { text: '', color: '#4caf50' };
+      distanceStatusEl.textContent = status.text;
+      distanceStatusEl.style.color = status.color;
+    }
+
+    const activityEl = panel.querySelector('#ergo-activity');
+    if (activityEl) activityEl.textContent = result.activity;
+
+    const objectStatusEl = panel.querySelector('#ergo-object-status');
+    if (objectStatusEl) objectStatusEl.textContent = result.objectStatus;
+
+    const progressEl = panel.querySelector('#ergo-progress');
+    const completedCount = result.stepProgress.filter(s => s.completed).length;
+    if (progressEl) progressEl.textContent = `${completedCount} / 5`;
+
+    const livesEl = panel.querySelector('#ergo-lives');
+    if (livesEl) livesEl.textContent = `Kesempatan: ${result.lives}/${result.maxLives}`;
+  }
+
   private onResize(): void {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -1265,6 +1331,8 @@ kitchenModel: null,
     if (this.fridgeInteraction) {
       this.fridgeInteraction.update(delta);
     }
+
+    this.ergonomicAssessment?.update(delta, this.player.state, input);
 
     this.proximityTeleport.update();
 
