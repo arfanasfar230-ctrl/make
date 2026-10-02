@@ -3,6 +3,7 @@ import type { SceneContext } from './types';
 interface StoveFireMinigameOptions {
   onSuccess?: () => void;
   onClose?: () => void;
+  onComplete?: (success: boolean, mistakes: number) => void;
 }
 
 export class StoveFireMinigame {
@@ -17,11 +18,15 @@ export class StoveFireMinigame {
   private timeDisplay!: HTMLElement;
   private levelDisplay!: HTMLElement;
   private messageDisplay!: HTMLElement;
+  private attemptsDisplay!: HTMLElement;
   private timerId: ReturnType<typeof setTimeout> | null = null;
   private animationId: number | null = null;
   private startTime: number = 0;
   private timeLimit = 5000;
   private hasCompleted = false;
+  private attempts = 0;
+  private maxAttempts = 3;
+  private mistakes = 0;
 
   constructor(ctx: SceneContext, options: StoveFireMinigameOptions = {}) {
     this.ctx = ctx;
@@ -133,6 +138,16 @@ export class StoveFireMinigame {
       gap: 20px;
     `;
 
+    this.attemptsDisplay = document.createElement('div');
+    this.attemptsDisplay.id = 'stove-fire-attempts';
+    this.attemptsDisplay.style.cssText = `
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #666;
+      text-align: center;
+    `;
+    this.attemptsDisplay.textContent = `Kesempatan: ${this.maxAttempts}/${this.maxAttempts}`;
+
     this.timeDisplay = document.createElement('div');
     this.timeDisplay.id = 'stove-fire-time';
     this.timeDisplay.style.cssText = `
@@ -218,6 +233,7 @@ export class StoveFireMinigame {
     sliderContainer.appendChild(sliderTrack);
     sliderContainer.appendChild(levelMarks);
 
+    content.appendChild(this.attemptsDisplay);
     content.appendChild(this.timeDisplay);
     content.appendChild(this.levelDisplay);
     content.appendChild(sliderContainer);
@@ -297,6 +313,7 @@ export class StoveFireMinigame {
 
     if (success) {
       this.options.onSuccess?.();
+      this.options.onComplete?.(true, this.mistakes);
       setTimeout(() => this.close(), 500);
     }
   }
@@ -304,19 +321,33 @@ export class StoveFireMinigame {
   private failMinigame(): void {
     if (this.hasCompleted) return;
     this.hasCompleted = true;
+    this.attempts++;
+    this.mistakes++;
 
     if (this.animationId) {
       cancelAnimationFrame(this.animationId);
       this.animationId = null;
     }
 
-    this.messageDisplay.textContent = 'wortel kamu gosong silahkan coba lagi';
-    this.messageDisplay.style.color = '#f44336';
-    this.slider.disabled = true;
+    this.attemptsDisplay.textContent = `Kesempatan: ${this.maxAttempts - this.attempts}/${this.maxAttempts}`;
 
-    this.timerId = setTimeout(() => {
-      this.resetMinigame();
-    }, 2000);
+    if (this.attempts >= this.maxAttempts) {
+      this.messageDisplay.textContent = 'Game Over - Wortel gosong!';
+      this.messageDisplay.style.color = '#f44336';
+      this.slider.disabled = true;
+      this.options.onComplete?.(false, this.mistakes);
+      this.timerId = setTimeout(() => {
+        this.close();
+      }, 2000);
+    } else {
+      this.messageDisplay.textContent = 'wortel kamu gosong silahkan coba lagi';
+      this.messageDisplay.style.color = '#f44336';
+      this.slider.disabled = true;
+
+      this.timerId = setTimeout(() => {
+        this.resetMinigame();
+      }, 2000);
+    }
   }
 
   private resetMinigame(): void {
@@ -343,6 +374,9 @@ export class StoveFireMinigame {
     document.exitPointerLock?.();
     this.container.style.display = 'block';
     this.disableMainSceneInteraction();
+    this.attempts = 0;
+    this.mistakes = 0;
+    this.attemptsDisplay.textContent = `Kesempatan: ${this.maxAttempts}/${this.maxAttempts}`;
     this.generateNewChallenge();
     this.startTimer();
   }
@@ -368,6 +402,14 @@ export class StoveFireMinigame {
 
   public isOpened(): boolean {
     return this.isOpen;
+  }
+
+  public getAttempts(): number {
+    return this.attempts;
+  }
+
+  public getMaxAttempts(): number {
+    return this.maxAttempts;
   }
 
   private disableMainSceneInteraction(): void {

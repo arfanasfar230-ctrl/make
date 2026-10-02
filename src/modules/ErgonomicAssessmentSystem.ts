@@ -1,40 +1,34 @@
 import * as THREE from 'three';
 import type { SceneContext, InteractiveObject, PlayerState, ControlInput } from './types';
-import { FridgeInteractionSystem, FridgeState } from './FridgeInteractionSystem';
+import { FridgeInteractionSystem, FridgeState, FridgeDoorState } from './FridgeInteractionSystem';
 import { CarrotCleaner } from './CarrotCleaner';
 import { StoveFireMinigame } from './StoveFireMinigame';
 import { WindowSystem } from './WindowSystem';
 
-export type ErgonomicStep = 
-  | 'FRIDGE' 
-  | 'TAKE_CARROT' 
-  | 'CLEAN_CARROT' 
-  | 'WINDOW' 
-  | 'STOVE' 
+export type ErgonomicStep =
+  | 'FRIDGE'
+  | 'TAKE_CARROT'
+  | 'CLEAN_CARROT'
+  | 'WINDOW'
+  | 'STOVE'
   | 'FINISHED';
 
 export interface ErgonomicAssessmentConfig {
-  minDistance: number;
-  maxDistance: number;
   penalty: {
     tooClose: number;
     tooFar: number;
     fridgeDoorCollision: number;
     failedMinigame: number;
-    extraAttempt: number;
   };
   perfectRunThreshold: number;
 }
 
 const DEFAULT_CONFIG: ErgonomicAssessmentConfig = {
-  minDistance: 0.7,
-  maxDistance: 1.0,
   penalty: {
     tooClose: 5,
     tooFar: 5,
     fridgeDoorCollision: 10,
     failedMinigame: 10,
-    extraAttempt: 5,
   },
   perfectRunThreshold: 100,
 };
@@ -42,7 +36,6 @@ const DEFAULT_CONFIG: ErgonomicAssessmentConfig = {
 interface StepState {
   completed: boolean;
   perfect: boolean;
-  attempts: number;
   penaltyApplied: {
     tooClose: boolean;
     tooFar: boolean;
@@ -53,16 +46,28 @@ interface StepState {
 export interface ErgonomicAssessmentResult {
   currentStep: ErgonomicStep;
   score: number;
-  lives: number;
-  maxLives: number;
   stepProgress: { step: ErgonomicStep; completed: boolean; perfect: boolean }[];
   distance: number;
   distanceStatus: 'tooClose' | 'ergonomic' | 'tooFar';
   activity: string;
   objectStatus: string;
+  activityStatus: 'Selesai' | 'Berlangsung';
   perfectRun: boolean;
   finished: boolean;
 }
+
+interface StepDistanceRange {
+  min: number;
+  max: number;
+}
+
+const STEP_DISTANCE_RANGES: Record<string, StepDistanceRange> = {
+  FRIDGE: { min: 0.7, max: 1.0 },
+  TAKE_CARROT: { min: 0.7, max: 1.0 },
+  CLEAN_CARROT: { min: 0.5, max: 0.7 },
+  WINDOW: { min: 0.6, max: 0.8 },
+  STOVE: { min: 0.5, max: 0.7 },
+};
 
 export class ErgonomicAssessmentSystem {
   private ctx: SceneContext;
@@ -74,24 +79,30 @@ export class ErgonomicAssessmentSystem {
 
   private currentStep: ErgonomicStep = 'FRIDGE';
   private score = 100;
-  private lives = 3;
-  private maxLives = 3;
   private perfectRun = true;
   private finished = false;
 
   private stepStates: Map<ErgonomicStep, StepState> = new Map();
   private stepOrder: ErgonomicStep[] = ['FRIDGE', 'TAKE_CARROT', 'CLEAN_CARROT', 'WINDOW', 'STOVE'];
-  
+
   private lastDistance = 0;
   private lastDistanceStatus: 'tooClose' | 'ergonomic' | 'tooFar' = 'ergonomic';
   private lastActivity = '';
   private lastObjectStatus = '';
-  
+  private lastActivityStatus: 'Selesai' | 'Berlangsung' = 'Berlangsung';
+
   private currentTargetObject: InteractiveObject | null = null;
   private penaltyFlags: Set<string> = new Set();
 
   private panel: HTMLElement | null = null;
   private onResultChange: ((result: ErgonomicAssessmentResult) => void) | null = null;
+
+  private fridgeDoorOpened = false;
+  private fridgeDoorClosed = false;
+  private carrotCleanCompleted = false;
+  private windowOpened = false;
+  private stoveMinigameCompleted = false;
+  private faucetOn = false;
 
   constructor(ctx: SceneContext, config?: Partial<ErgonomicAssessmentConfig>) {
     this.ctx = ctx;
@@ -101,7 +112,6 @@ export class ErgonomicAssessmentSystem {
       this.stepStates.set(step, {
         completed: false,
         perfect: true,
-        attempts: 0,
         penaltyApplied: { tooClose: false, tooFar: false, fridgeDoorCollision: false },
       });
     });
@@ -166,16 +176,19 @@ export class ErgonomicAssessmentSystem {
     const distance = this.calculateDistance(playerState, this.currentTargetObject);
     this.lastDistance = distance;
 
-    if (distance < this.config.minDistance) {
-      this.lastDistanceStatus = 'tooClose';
-      this.applyPenalty('tooClose');
-    } else if (distance > this.config.maxDistance) {
-      this.lastDistanceStatus = 'tooFar';
-      this.applyPenalty('tooFar');
-    } else {
-      this.lastDistanceStatus = 'ergonomic';
-      this.clearPenalty('tooClose');
-      this.clearPenalty('tooFar');
+    const range = STEP_DISTANCE_RANGES[this.currentStep];
+    if (range) {
+      if (distance < range.min) {
+        this.lastDistanceStatus = 'tooClose';
+        this.applyPenalty('tooClose');
+      } else if (distance > range.max) {
+        this.lastDistanceStatus = 'tooFar';
+        this.applyPenalty('tooFar');
+      } else {
+        this.lastDistanceStatus = 'ergonomic';
+        this.clearPenalty('tooClose');
+        this.clearPenalty('tooFar');
+      }
     }
   }
 
@@ -224,45 +237,49 @@ export class ErgonomicAssessmentSystem {
   private updateFridgeStep(playerState: PlayerState, input: ControlInput, stepState: StepState): void {
     if (!this.fridgeInteraction) return;
 
-    const isOpen = this.fridgeInteraction.getState() === FridgeState.IDLE && this.isFridgeDoorOpen();
-    
+    const doorState = this.fridgeInteraction.getDoorState();
+    const isDoorOpen = doorState === FridgeDoorState.OPEN;
+    const isDoorClosed = doorState === FridgeDoorState.CLOSED;
+
     this.lastActivity = 'Membuka kulkas';
-    this.lastObjectStatus = isOpen ? 'Terbuka' : 'Tertutup';
+    this.lastObjectStatus = isDoorOpen ? 'Terbuka' : isDoorClosed ? 'Tertutup' : 'Bergerak';
+    this.lastActivityStatus = isDoorClosed && this.fridgeDoorOpened ? 'Selesai' : 'Berlangsung';
 
-    if (isOpen && !stepState.completed) {
-      this.completeStep('FRIDGE');
+    if (isDoorOpen && !this.fridgeDoorOpened) {
+      this.fridgeDoorOpened = true;
     }
-  }
 
-  private isFridgeDoorOpen(): boolean {
-    if (!this.fridgeInteraction || !this.fridgeInteraction.getFridgeModel()) return false;
-    return this.fridgeInteraction.isFridgeOpen();
+    if (isDoorClosed && this.fridgeDoorOpened && !this.fridgeDoorClosed) {
+      this.fridgeDoorClosed = true;
+      this.completeFridgeAssessment();
+    }
   }
 
   private updateTakeCarrotStep(playerState: PlayerState, input: ControlInput, stepState: StepState): void {
-    if (!this.fridgeInteraction) return;
-
-    const isOpen = this.fridgeInteraction.getState() === FridgeState.IDLE && this.isFridgeDoorOpen();
-    
     this.lastActivity = 'Mengambil wortel';
-    this.lastObjectStatus = isOpen ? 'Kulkas terbuka' : 'Kulkas tertutup';
-
-    if (isOpen && input.interact && !input.interactKey) {
-      this.completeStep('TAKE_CARROT');
-    }
+    this.lastObjectStatus = 'Kulkas terbuka';
+    this.lastActivityStatus = 'Selesai';
+    this.completeStep('TAKE_CARROT');
   }
 
   private updateCleanCarrotStep(playerState: PlayerState, input: ControlInput, stepState: StepState): void {
     if (!this.carrotCleaner) return;
 
-    const isFaucetOn = this.carrotCleaner.isOpened();
-    
     this.lastActivity = 'Mencuci wortel';
-    this.lastObjectStatus = isFaucetOn ? 'Kran menyala' : 'Kran mati';
+    this.lastObjectStatus = this.faucetOn ? 'Kran menyala' : 'Kran mati';
+    this.lastActivityStatus = (this.carrotCleanCompleted && !this.faucetOn) ? 'Selesai' : 'Berlangsung';
 
-    if (isFaucetOn && !this.carrotCleaner.isOpened()) {
-      this.completeStep('CLEAN_CARROT');
+    if (this.carrotCleanCompleted && this.faucetOn) {
+      this.lastObjectStatus = 'Wortel bersih - matikan kran';
     }
+
+    if (this.carrotCleanCompleted && !this.faucetOn) {
+      this.completeCarrotCleaningAssessment();
+    }
+  }
+
+  public setFaucetState(on: boolean): void {
+    this.faucetOn = on;
   }
 
   private updateWindowStep(playerState: PlayerState, input: ControlInput, stepState: StepState): void {
@@ -270,12 +287,14 @@ export class ErgonomicAssessmentSystem {
 
     const windowName = 'jendela_g1';
     const isOpen = this.windowSystem.isWindowOpen(windowName);
-    
+
     this.lastActivity = 'Membuka jendela';
     this.lastObjectStatus = isOpen ? 'Terbuka' : 'Tertutup';
+    this.lastActivityStatus = isOpen ? 'Selesai' : 'Berlangsung';
 
-    if (isOpen && !stepState.completed) {
-      this.completeStep('WINDOW');
+    if (isOpen && !this.windowOpened) {
+      this.windowOpened = true;
+      this.completeWindowAssessment();
     }
   }
 
@@ -283,21 +302,52 @@ export class ErgonomicAssessmentSystem {
     if (!this.stoveFireMinigame) return;
 
     const isMinigameOpen = this.stoveFireMinigame.isOpened();
-    
+
     this.lastActivity = 'Memasak wortel';
     this.lastObjectStatus = isMinigameOpen ? 'Minigame berjalan' : 'Siap memasak';
+    this.lastActivityStatus = this.stoveMinigameCompleted ? 'Selesai' : 'Berlangsung';
 
-    if (isMinigameOpen) {
-      stepState.attempts++;
+    if (this.stoveMinigameCompleted) {
+      this.completeStoveAssessment();
     }
+  }
 
-    if (this.stoveFireMinigame.isOpened() === false && stepState.attempts > 0) {
-      this.completeStep('STOVE');
-    }
+  public completeFridgeAssessment(): void {
+    if (this.currentStep !== 'FRIDGE') return;
+    this.completeStep('FRIDGE');
+    this.completeStep('TAKE_CARROT');
+  }
+
+  public completeCarrotCleaningAssessment(): void {
+    if (this.currentStep !== 'CLEAN_CARROT') return;
+    this.completeStep('CLEAN_CARROT');
+  }
+
+  public completeWindowAssessment(): void {
+    if (this.currentStep !== 'WINDOW') return;
+    this.completeStep('WINDOW');
+  }
+
+  public completeStoveAssessment(): void {
+    if (this.currentStep !== 'STOVE') return;
+    this.completeStep('STOVE');
+  }
+
+  public onCarrotCleanComplete(): void {
+    this.carrotCleanCompleted = true;
+  }
+
+  public onStoveMinigameComplete(): void {
+    this.stoveMinigameCompleted = true;
+  }
+
+  public onFridgeDoorCollision(): void {
+    this.applyPenalty('fridgeDoorCollision');
   }
 
   private completeStep(step: ErgonomicStep): void {
     const stepState = this.stepStates.get(step)!;
+    if (stepState.completed) return;
     stepState.completed = true;
 
     const currentIndex = this.stepOrder.indexOf(step);
@@ -309,6 +359,16 @@ export class ErgonomicAssessmentSystem {
     }
 
     this.penaltyFlags.clear();
+    this.resetStepFlags();
+  }
+
+  private resetStepFlags(): void {
+    this.fridgeDoorOpened = false;
+    this.fridgeDoorClosed = false;
+    this.carrotCleanCompleted = false;
+    this.windowOpened = false;
+    this.stoveMinigameCompleted = false;
+    this.faucetOn = false;
   }
 
   private findObjectByName(name: string): InteractiveObject | null {
@@ -345,8 +405,6 @@ export class ErgonomicAssessmentSystem {
     return {
       currentStep: this.currentStep,
       score: Math.max(0, this.score),
-      lives: this.lives,
-      maxLives: this.maxLives,
       stepProgress: this.stepOrder.map(step => ({
         step,
         completed: this.stepStates.get(step)?.completed ?? false,
@@ -356,6 +414,7 @@ export class ErgonomicAssessmentSystem {
       distanceStatus: this.lastDistanceStatus,
       activity: this.lastActivity,
       objectStatus: this.lastObjectStatus,
+      activityStatus: this.lastActivityStatus,
       perfectRun: this.perfectRun,
       finished: this.finished,
     };
@@ -364,7 +423,6 @@ export class ErgonomicAssessmentSystem {
   public reset(): void {
     this.currentStep = 'FRIDGE';
     this.score = 100;
-    this.lives = this.maxLives;
     this.perfectRun = true;
     this.finished = false;
     this.penaltyFlags.clear();
@@ -372,23 +430,16 @@ export class ErgonomicAssessmentSystem {
     this.lastDistanceStatus = 'ergonomic';
     this.lastActivity = '';
     this.lastObjectStatus = '';
+    this.lastActivityStatus = 'Berlangsung';
+    this.resetStepFlags();
 
     this.stepOrder.forEach(step => {
       this.stepStates.set(step, {
         completed: false,
         perfect: true,
-        attempts: 0,
         penaltyApplied: { tooClose: false, tooFar: false, fridgeDoorCollision: false },
       });
     });
-  }
-
-  public loseLife(): void {
-    this.lives = Math.max(0, this.lives - 1);
-    this.perfectRun = false;
-    if (this.lives <= 0) {
-      this.finished = true;
-    }
   }
 
   private updatePanel(): void {
@@ -415,21 +466,25 @@ export function createErgonomicAssessmentPanel(): HTMLElement {
     color: #e0e0e0;
     pointer-events: none;
   `;
-  
+
   panel.innerHTML = `
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.1);">
-      <h3 style="font-size: 0.85rem; font-weight: 700; letter-spacing: 0.06em; color: #e94560; text-transform: uppercase; margin: 0;">ERGONOMIC ASSESSMENT</h3>
-      <span id="ergo-lives" style="font-size: 0.75rem; font-weight: 600; color: #f44336; background: rgba(244, 67, 54, 0.1); padding: 2px 8px; border-radius: 12px;">Kesempatan: 3/3</span>
+      <h3 style="font-size: 0.85rem; font-weight: 700; letter-spacing: 0.06em; color: #e94560; text-transform: uppercase; margin: 0;">PENILAIAN ERGONOMI</h3>
     </div>
-    
+
     <div style="margin-bottom: 16px;">
-      <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Nilai</div>
+      <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Skor</div>
       <div id="ergo-score" style="font-size: 2rem; font-weight: 700; color: #4caf50;">100 / 100</div>
     </div>
 
     <div style="margin-bottom: 16px;">
       <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Tahap</div>
-      <div id="ergo-step" style="font-size: 1rem; font-weight: 600; color: #e94560;">Buka Kulkas</div>
+      <div id="ergo-step" style="font-size: 1rem; font-weight: 600; color: #e94560;">Mengambil bahan</div>
+    </div>
+
+    <div style="margin-bottom: 16px;">
+      <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Aktivitas</div>
+      <div id="ergo-activity" style="font-size: 0.85rem; font-weight: 500; color: #aaa;">Kulkas</div>
     </div>
 
     <div style="margin-bottom: 16px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
@@ -439,13 +494,8 @@ export function createErgonomicAssessmentPanel(): HTMLElement {
     </div>
 
     <div style="margin-bottom: 16px;">
-      <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Aktivitas</div>
-      <div id="ergo-activity" style="font-size: 0.85rem; font-weight: 500; color: #aaa;">Membuka kulkas</div>
-    </div>
-
-    <div style="margin-bottom: 16px;">
-      <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Status Objek</div>
-      <div id="ergo-object-status" style="font-size: 0.85rem; font-weight: 500; color: #aaa;">Tertutup</div>
+      <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Status Aktivitas</div>
+      <div id="ergo-activity-status" style="font-size: 0.85rem; font-weight: 600; color: #ff9800;">Berlangsung</div>
     </div>
 
     <div style="margin-bottom: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05);">

@@ -341,15 +341,13 @@ kitchenModel: null,
         onCleanComplete: () => {
           console.log('Carrot cleaning complete!');
           this.carrotCleanSucceeded = true;
+          this.ergonomicAssessment?.onCarrotCleanComplete();
         },
         onClose: () => {
           console.log('Carrot cleaner closed');
-          // Setelah selesai membersihkan, kembalikan ke mode crosshair (pointer lock)
           if (this.currentMode === 'desktop' && this.desktopControls) {
             this.desktopControls.requestPointerLock();
           }
-          // Setelah selesai membersihkan, kembalikan ke popup opsi kran
-          // supaya player bisa mematikan kran.
           if (this.carrotCleanSucceeded) {
             this.carrotCleanSucceeded = false;
             this.showInteractionPanel();
@@ -365,6 +363,12 @@ kitchenModel: null,
           console.log('Stove fire minigame closed');
           if (this.currentMode === 'desktop' && this.desktopControls) {
             this.desktopControls.requestPointerLock();
+          }
+        },
+        onComplete: (success: boolean, mistakes: number) => {
+          console.log(`Stove minigame complete: success=${success}, mistakes=${mistakes}`);
+          if (success) {
+            this.ergonomicAssessment?.onStoveMinigameComplete();
           }
         }
       });
@@ -576,7 +580,11 @@ kitchenModel: null,
 
     this.fridgeInteraction = new FridgeInteractionSystem(this.ctx, this.collision);
     await this.fridgeInteraction.initialize(fridgeModel, gltf.animations);
-    // FridgeInteractionSystem handles door animation, InteractionSystem handles F/click detection
+    this.fridgeInteraction.setEvents({
+      onDoorCollision: () => {
+        this.ergonomicAssessment?.onFridgeDoorCollision();
+      }
+    });
   }
 
   /**
@@ -897,8 +905,12 @@ kitchenModel: null,
           if (hover && hoverType && (hoverType === 'faucet' || hoverType === 'window' || hoverType === 'stove' || hoverType === 'fridge')) {
             const wasFaucetOpen = hoverType === 'faucet' && this.interaction?.isFaucetOpen();
             this.interaction?.tryInteract();
-            if (hoverType === 'faucet' && !wasFaucetOpen && this.interaction?.isFaucetOpen()) {
-              this.scheduleCarrotCleanPrompt();
+            if (hoverType === 'faucet') {
+              const isFaucetOpen = this.interaction?.isFaucetOpen();
+              this.ergonomicAssessment?.setFaucetState(isFaucetOpen ?? false);
+              if (!wasFaucetOpen && isFaucetOpen) {
+                this.scheduleCarrotCleanPrompt();
+              }
             }
           }
         }
@@ -1218,19 +1230,27 @@ kitchenModel: null,
     const panel = document.getElementById('ergonomic-assessment-panel') as HTMLElement;
     if (!panel) return;
 
-    const scoreEl = panel.querySelector('#ergo-score');
-    if (scoreEl) scoreEl.textContent = `${result.score} / 100`;
+    const scoreEl = panel.querySelector('#ergo-score') as HTMLElement;
+    if (scoreEl) {
+      scoreEl.textContent = `${result.score} / 100`;
+      if (result.score >= 80) scoreEl.style.color = '#4caf50';
+      else if (result.score >= 50) scoreEl.style.color = '#ff9800';
+      else scoreEl.style.color = '#f44336';
+    }
 
     const stepEl = panel.querySelector('#ergo-step');
     const stepNames: Record<string, string> = {
-      FRIDGE: 'Buka Kulkas',
-      TAKE_CARROT: 'Ambil Wortel',
-      CLEAN_CARROT: 'Cuci Wortel',
-      WINDOW: 'Buka Jendela',
-      STOVE: 'Masak Wortel',
+      FRIDGE: 'Mengambil bahan',
+      TAKE_CARROT: 'Mengambil wortel',
+      CLEAN_CARROT: 'Mencuci wortel',
+      WINDOW: 'Ventilasi',
+      STOVE: 'Memasak',
       FINISHED: 'Selesai',
     };
     if (stepEl) stepEl.textContent = stepNames[result.currentStep] || result.currentStep;
+
+    const activityEl = panel.querySelector('#ergo-activity');
+    if (activityEl) activityEl.textContent = result.activity;
 
     const distanceEl = panel.querySelector('#ergo-distance');
     if (distanceEl) distanceEl.textContent = `${result.distance.toFixed(2)} m`;
@@ -1247,18 +1267,15 @@ kitchenModel: null,
       distanceStatusEl.style.color = status.color;
     }
 
-    const activityEl = panel.querySelector('#ergo-activity');
-    if (activityEl) activityEl.textContent = result.activity;
-
-    const objectStatusEl = panel.querySelector('#ergo-object-status');
-    if (objectStatusEl) objectStatusEl.textContent = result.objectStatus;
+    const activityStatusEl = panel.querySelector('#ergo-activity-status') as HTMLElement;
+    if (activityStatusEl) {
+      activityStatusEl.textContent = result.activityStatus;
+      activityStatusEl.style.color = result.activityStatus === 'Selesai' ? '#4caf50' : '#ff9800';
+    }
 
     const progressEl = panel.querySelector('#ergo-progress');
     const completedCount = result.stepProgress.filter(s => s.completed).length;
     if (progressEl) progressEl.textContent = `${completedCount} / 5`;
-
-    const livesEl = panel.querySelector('#ergo-lives');
-    if (livesEl) livesEl.textContent = `Kesempatan: ${result.lives}/${result.maxLives}`;
   }
 
   private onResize(): void {
@@ -1358,8 +1375,12 @@ kitchenModel: null,
       if (input.interact && !input.interactKey) {
         const wasFaucetOpen = hoverType === 'faucet' && this.interaction.isFaucetOpen();
         this.interaction.tryInteract();
-        if (hoverType === 'faucet' && !wasFaucetOpen && this.interaction.isFaucetOpen()) {
-          this.scheduleCarrotCleanPrompt();
+        if (hoverType === 'faucet') {
+          const isFaucetOpen = this.interaction.isFaucetOpen();
+          this.ergonomicAssessment?.setFaucetState(isFaucetOpen);
+          if (!wasFaucetOpen && isFaucetOpen) {
+            this.scheduleCarrotCleanPrompt();
+          }
         }
       }
     } else {

@@ -7,13 +7,19 @@ export enum FridgeState {
   INTERACTION_MENU = 'interaction_menu',
 }
 
-/**
- * Interaksi kulkas yang terkunci di posisinya (objek tetap).
- *
- * Satu-satunya aksi pemain adalah membuka / menutup pintu kulkas lewat tombol
- * [F], yang memutar clip animasi pintu (CINEMA_4D_Main). Tidak ada mode pindah
- * atau putar — kulkas selalu berada di orientasi tetap, menghadap wastafel.
- */
+export enum FridgeDoorState {
+  CLOSED = 'closed',
+  OPENING = 'opening',
+  OPEN = 'open',
+  CLOSING = 'closing',
+}
+
+export interface FridgeEvents {
+  onDoorOpened?: () => void;
+  onDoorClosed?: () => void;
+  onDoorCollision?: () => void;
+}
+
 export class FridgeInteractionSystem {
   private ctx: SceneContext;
   private collision: CollisionSystem;
@@ -33,8 +39,14 @@ export class FridgeInteractionSystem {
   private promptText: HTMLElement | null = null;
   private interactionPrompt: HTMLElement | null = null;
   private fridgeHovered = false;
-  // Track pointer lock state so we always use crosshair (0,0) in FPS mode
   private pointerLocked = false;
+
+  private doorState: FridgeDoorState = FridgeDoorState.CLOSED;
+  private doorAnimationDuration = 0;
+  private doorAnimationTimer = 0;
+  private doorCooldown = 0;
+  private doorCollisionPenaltyApplied = false;
+  private events: FridgeEvents = {};
 
   constructor(ctx: SceneContext, collision: CollisionSystem) {
     this.ctx = ctx;
@@ -79,14 +91,7 @@ export class FridgeInteractionSystem {
       this.doorAnimationAction = this.animationMixer.clipAction(doorAnim);
       this.doorAnimationAction.setLoop(THREE.LoopOnce, 1);
       this.doorAnimationAction.clampWhenFinished = true;
-    }
-  }
-
-  private getBaseUrl(): string {
-    try {
-      return import.meta.env.BASE_URL ?? `${window.location.origin}/`;
-    } catch {
-      return `${window.location.origin}/`;
+      this.doorAnimationDuration = doorAnim.duration;
     }
   }
 
@@ -102,8 +107,33 @@ export class FridgeInteractionSystem {
       this.animationMixer.update(delta);
     }
 
+    this.updateDoorAnimation(delta);
     this.updateCollider();
     this.checkHover();
+  }
+
+  private updateDoorAnimation(delta: number): void {
+    if (this.isDoorAnimating()) {
+      this.doorAnimationTimer += delta;
+      this.checkDoorCollision();
+      if (this.doorAnimationTimer >= this.doorAnimationDuration) {
+        if (this.doorState === FridgeDoorState.OPENING) {
+          this.doorState = FridgeDoorState.OPEN;
+          this.isOpen = true;
+          this.doorCooldown = 1.4;
+          this.events.onDoorOpened?.();
+        } else {
+          this.doorState = FridgeDoorState.CLOSED;
+          this.isOpen = false;
+          this.doorCooldown = 0.5;
+          this.events.onDoorClosed?.();
+        }
+      }
+    }
+
+    if (this.doorCooldown > 0) {
+      this.doorCooldown -= delta;
+    }
   }
 
   private updateCollider(): void {
@@ -121,11 +151,39 @@ export class FridgeInteractionSystem {
     return this.isOpen;
   }
 
+  public getDoorState(): FridgeDoorState {
+    return this.doorState;
+  }
+
+  public isDoorAnimating(): boolean {
+    return this.doorState === FridgeDoorState.OPENING || this.doorState === FridgeDoorState.CLOSING;
+  }
+
+  public setEvents(events: FridgeEvents): void {
+    this.events = events;
+  }
+
+  private checkDoorCollision(): void {
+    if (this.doorCollisionPenaltyApplied) return;
+    if (!this.fridgeModel) return;
+
+    const playerPos = this.ctx.camera.position.clone();
+    playerPos.y = this.ctx.floorY;
+    const fridgePos = this.fridgeModel.position.clone();
+    fridgePos.y = this.ctx.floorY;
+
+    const distance = playerPos.distanceTo(fridgePos);
+    const threshold = 1.5 * Math.max(this.ctx.sceneScale, 1e-6);
+
+    if (distance < threshold) {
+      this.doorCollisionPenaltyApplied = true;
+      this.events.onDoorCollision?.();
+    }
+  }
+
   private checkHover(): void {
     if (!this.fridgeModel || this.state === FridgeState.INTERACTION_MENU) return;
 
-    // In FPS/pointer-lock mode, ALWAYS use crosshair (center) for detection.
-    // Only use actual mouse position when cursor is free (e.g. mobile or unlocked).
     const castFrom = this.pointerLocked
       ? new THREE.Vector2(0, 0)
       : this.mouse;
@@ -149,22 +207,18 @@ export class FridgeInteractionSystem {
     this.mouse.set(x, y);
   }
 
-  /** Call this from main.ts whenever pointer lock state changes. */
   public setPointerLocked(locked: boolean): void {
     this.pointerLocked = locked;
     if (locked) {
-      // Always use crosshair center when pointer is locked
       this.mouse.set(0, 0);
     }
   }
 
   public onMouseDown(_event: MouseEvent): boolean {
-    // Kulkas adalah objek tetap: klik tidak memulai mode pindah/putar.
     return false;
   }
 
   public onMouseUp(): void {
-    // Tidak ada drag kulkas untuk dilepas; state selalu kembali IDLE.
     this.state = FridgeState.IDLE;
   }
 
@@ -186,20 +240,25 @@ export class FridgeInteractionSystem {
 
   public toggleFridgeDoor(): void {
     if (!this.doorAnimationAction) return;
+    if (this.doorCooldown > 0) return;
+    if (this.isDoorAnimating()) return;
 
-    if (this.isOpen) {
-      this.doorAnimationAction.timeScale = -1;
-      this.doorAnimationAction.paused = false;
-      this.doorAnimationAction.play();
-      this.isOpen = false;
-      this.showPrompt('Pintu Kulkas Ditutup');
-    } else {
+    if (this.doorState === FridgeDoorState.CLOSED) {
+      this.doorState = FridgeDoorState.OPENING;
       this.doorAnimationAction.reset();
       this.doorAnimationAction.timeScale = 1;
       this.doorAnimationAction.paused = false;
       this.doorAnimationAction.play();
-      this.isOpen = true;
+      this.doorAnimationTimer = 0;
+      this.doorCollisionPenaltyApplied = false;
       this.showPrompt('Pintu Kulkas Terbuka');
+    } else if (this.doorState === FridgeDoorState.OPEN) {
+      this.doorState = FridgeDoorState.CLOSING;
+      this.doorAnimationAction.timeScale = -1;
+      this.doorAnimationAction.paused = false;
+      this.doorAnimationAction.play();
+      this.doorAnimationTimer = 0;
+      this.showPrompt('Pintu Kulkas Ditutup');
     }
   }
 
@@ -261,13 +320,6 @@ export class FridgeInteractionSystem {
       this.interactionPanelOptions!.innerHTML = '';
     }
     this.state = FridgeState.IDLE;
-  }
-
-  private openFridge(): void {
-    if (this.doorAnimationAction) {
-      this.doorAnimationAction.reset();
-      this.doorAnimationAction.play();
-    }
   }
 
   public getState(): FridgeState {
