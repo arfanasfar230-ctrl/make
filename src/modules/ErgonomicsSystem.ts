@@ -15,13 +15,6 @@ const ERGONOMIC_RANGES: Record<string, {
     maxDist: 1.0,
     idealHeightRatio: [0.40, 0.55],
   },
-  stove: {
-    idealMinDist: 0.25,
-    idealMaxDist: 0.65,
-    minDist: 0.10,
-    maxDist: 1.2,
-    idealHeightRatio: [0.38, 0.52],
-  },
   sink: {
     idealMinDist: 0.15,
     idealMaxDist: 0.55,
@@ -35,27 +28,6 @@ const ERGONOMIC_RANGES: Record<string, {
     minDist: 0.15,
     maxDist: 1.5,
     idealHeightRatio: [0.0, 1.0],
-  },
-  cabinet: {
-    idealMinDist: 0.20,
-    idealMaxDist: 0.60,
-    minDist: 0.10,
-    maxDist: 1.2,
-    idealHeightRatio: [0.50, 0.90],
-  },
-  prep_area: {
-    idealMinDist: 0.15,
-    idealMaxDist: 0.50,
-    minDist: 0.05,
-    maxDist: 1.0,
-    idealHeightRatio: [0.40, 0.55],
-  },
-  other: {
-    idealMinDist: 0.20,
-    idealMaxDist: 0.60,
-    minDist: 0.10,
-    maxDist: 1.2,
-    idealHeightRatio: [0.35, 0.60],
   },
 };
 
@@ -72,7 +44,7 @@ export class ErgonomicsSystem {
   }
 
   private getRanges(category: string): typeof ERGONOMIC_RANGES.counter {
-    return ERGONOMIC_RANGES[category] || ERGONOMIC_RANGES.other;
+    return ERGONOMIC_RANGES[category] || ERGONOMIC_RANGES.counter;
   }
 
   public findNearestObject(playerPos: THREE.Vector3, excludeCategories: string[] = []): InteractiveObject | null {
@@ -293,12 +265,7 @@ export class ErgonomicsSystem {
   private calculateSafetyScore(distM: number, category: string): number {
     let baseScore = 80;
 
-    if (category === 'stove') {
-      if (distM < 0.2) baseScore = 20;
-      else if (distM < 0.4) baseScore = 50;
-      else if (distM < 1.0) baseScore = 90;
-      else baseScore = 75;
-    } else if (category === 'sink') {
+    if (category === 'sink') {
       if (distM < 0.15) baseScore = 60;
       else if (distM < 0.5) baseScore = 95;
       else baseScore = 80;
@@ -355,11 +322,6 @@ export class ErgonomicsSystem {
   }
 
   private getSafetyDescription(distM: number, category: string): string {
-    if (category === 'stove') {
-      if (distM < 0.3) return 'Terlalu dekat dengan kompor - bahaya panas';
-      if (distM < 0.5) return 'Jarak aman dari kompor';
-      return 'Jarak aman';
-    }
     if (distM < 0.2) return 'Sangat dekat - hati-hati';
     return 'Jarak aman';
   }
@@ -397,10 +359,6 @@ export class ErgonomicsSystem {
     const postureParam = params.find(p => p.name === 'Postur Kerja');
     if (postureParam && postureParam.value < 50) {
       recs.push('Hadap langsung ke objek untuk postur lebih baik');
-    }
-
-    if (obj.category === 'stove' && distM < 0.3) {
-      recs.push('Jaga jarak aman dari kompor untuk menghindari luka bakar');
     }
 
     if (obj.category === 'sink' && distM > 0.6) {

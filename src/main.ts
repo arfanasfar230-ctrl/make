@@ -30,9 +30,8 @@ const CARROT_CLEAN_DELAY_MS = 2300;
 
 // Objek yang tidak punya analisis ergonomi lewat tombol [E]. Kulkas, wastafel,
 // dan kompor hanya punya interaksi lewat [F] atau klik, sedangkan jendela punya
-// animasi buka-tutup sendiri. Semua objek lain (meja kerja, area persiapan,
-// panci) tetap bisa dianalisis dengan [E].
-const NON_ANALYZABLE_CATEGORIES = new Set<KitchenObjectCategory>(['sink', 'stove', 'fridge']);
+// animasi buka-tutup sendiri. Semua objek lain (meja kerja) tetap bisa dianalisis dengan [E].
+const NON_ANALYZABLE_CATEGORIES = new Set<KitchenObjectCategory>(['sink', 'fridge']);
 
 // Panci dekoratif di atas Meja Kerja Dapur 3 (G_8). X/Z adalah posisi world
 // target; Y ditentukan lewat raycast ke bawah agar dasar panci tepat di
@@ -330,6 +329,10 @@ kitchenModel: null,
 
       await this.loadJendelaG1();
 
+      await this.loadFridge();
+
+      await this.loadPan();
+
       this.interaction = new InteractionSystem(this.ctx);
 
       this.carrotCleaner = new CarrotCleaner(this.ctx, {
@@ -367,11 +370,11 @@ kitchenModel: null,
       this.doorTeleport = new DoorTeleportSystem(this.ctx);
       this.proximityTeleport = new ProximityTeleportSystem(this.ctx);
 
-      await this.loadFridge();
-
-      await this.loadPan();
-
       await this.loadServingSet();
+
+      // Inject dependencies into InteractionSystem after fridge/stove are loaded
+      this.interaction.setFridgeInteraction(this.fridgeInteraction);
+      this.interaction.setStoveFireMinigame(this.stoveFireMinigame);
 
       this.player = new PlayerController(this.ctx);
       this.debugSystem = new DebugSystem(this.ctx);
@@ -523,6 +526,8 @@ kitchenModel: null,
 
     fridgeModel.name = 'kulkas';
     fridgeModel.userData.isFridge = true;
+    fridgeModel.userData.interactable = true;
+    fridgeModel.userData.interaction = 'fridge';
 
     if (this.ctx.kitchenModel) {
       this.ctx.kitchenModel.add(fridgeModel);
@@ -552,6 +557,7 @@ kitchenModel: null,
 
     this.fridgeInteraction = new FridgeInteractionSystem(this.ctx, this.collision);
     await this.fridgeInteraction.initialize(fridgeModel, gltf.animations);
+    // FridgeInteractionSystem handles door animation, InteractionSystem handles F/click detection
   }
 
   /**
@@ -578,12 +584,9 @@ kitchenModel: null,
   }
 
   /**
-   * Memuat panci GLB dan mendudukkannya di atas Meja Kerja Dapur 3 (G_8).
-   * Skala dinormalisasi ke tinggi nyata (PAN_TARGET_HEIGHT_M) dan posisi Y
-   * dihitung dari raycast ke bawah di titik target sehingga dasar panci
-   * menyentuh permukaan meja tanpa melayang atau menembus. Panci didaftarkan
-   * sebagai objek interaktif: ada hitbox biru, bisa dianalisis ergonomi, dan
-   * bisa dipindah lewat tombol "Pindah & Putar".
+   * Memuat kompor (panci GLB) dan mendudukkannya di atas Meja Kerja Dapur 3 (G_8).
+   * Skala dinormalisasi ke tinggi nyata dan posisi Y dihitung dari raycast ke bawah.
+   * Kompor didaftarkan sebagai objek interaktif: hitbox biru, interaksi F/klik buka minigame api.
    */
   private async loadPan(): Promise<void> {
     const loader = new GLTFLoader();
@@ -613,7 +616,9 @@ kitchenModel: null,
 
     const surfaceY = this.findTableSurfaceY(PAN_TARGET_X, PAN_TARGET_Z);
     pan.position.set(PAN_TARGET_X, surfaceY - scaledBBox.min.y, PAN_TARGET_Z);
-    pan.name = 'panci';
+    pan.name = 'kompor';
+    pan.userData.interaction = 'stove';
+    pan.userData.interactable = true;
 
     if (this.ctx.kitchenModel) {
       this.ctx.kitchenModel.add(pan);
@@ -629,17 +634,15 @@ kitchenModel: null,
     panBox.getSize(panSize);
 
     this.ctx.interactiveObjects.push({
-      name: 'panci',
-      displayName: 'Panci',
-      category: 'other',
+      name: 'kompor',
+      displayName: 'Kompor',
+      category: 'stove',
       object3D: pan,
       boundingBox: panBox.clone(),
       center: panCenter.clone(),
       height: panSize.y,
       surfaceY: panBox.max.y,
-      // Panci boleh dipindah; surfaceY dipakai FurnitureMoveSystem.place()
-      // untuk memperbarui kotak pembatas setelah ditaruh.
-      movable: true,
+      movable: false,
       hitbox: true,
     });
   }
@@ -743,7 +746,7 @@ kitchenModel: null,
     windowModel.userData.interactable = true;
     windowModel.userData.interaction = 'window';
     windowModel.userData.windowName = 'jendela_g1';
-    windowModel.userData.windowLabel = 'Jendela G1';
+    windowModel.userData.windowLabel = 'Jendela';
 
     const mixer = new THREE.AnimationMixer(windowModel);
     const openClip = gltf.animations.find((clip) => clip.name === 'OPEN') ?? null;
@@ -870,18 +873,9 @@ kitchenModel: null,
       }
 
       if (e.code === 'KeyF') {
-        if (this.fridgeInteraction?.isFridgeHovered()) {
-          this.fridgeInteraction.toggleFridgeDoor();
-        } else {
           const hover = this.interaction?.getHover();
           const hoverType = this.interaction?.getHoverType?.();
-          const hitboxObj = this.hitboxTargetObj;
-          if (hitboxObj && hitboxObj.category === 'other' && hitboxObj.name === 'panci') {
-            if (!this.stoveFireMinigame?.isOpened()) {
-              document.exitPointerLock();
-              this.stoveFireMinigame.open();
-            }
-          } else if (hover && hoverType && (hoverType === 'faucet' || hoverType === 'window')) {
+          if (hover && hoverType && (hoverType === 'faucet' || hoverType === 'window' || hoverType === 'stove' || hoverType === 'fridge')) {
             const wasFaucetOpen = hoverType === 'faucet' && this.interaction?.isFaucetOpen();
             this.interaction?.tryInteract();
             if (hoverType === 'faucet' && !wasFaucetOpen && this.interaction?.isFaucetOpen()) {
@@ -889,7 +883,6 @@ kitchenModel: null,
             }
           }
         }
-      }
     });
 
     const ergoClose = document.getElementById('ergo-close')!;
@@ -1279,63 +1272,30 @@ kitchenModel: null,
       this.updateReachIndicator();
     }
 
-    // Crosshair-driven interaction for faucet/window
+    // Crosshair-driven interaction (faucet, window, stove/kompor, fridge)
     const hover = this.interaction.update(delta);
     const hoverType = this.interaction.getHoverType?.();
 
-    // Hitbox raycast for other objects (stove, fridge, etc.)
+    // Also update hitbox helper for other objects (counters, etc.)
     this.updateHitboxHelper();
-    const hitboxObj = this.hitboxTargetObj;
 
-    // Determine what the crosshair is actually pointing at
-    let targetObj: InteractiveObject | null = null;
-    let targetHint = '';
-
-    if (hover && hoverType && (hoverType === 'faucet' || hoverType === 'window')) {
-      // Crosshair on faucet or window - use interaction system
-      targetObj = {
-        displayName: hover.userData.windowLabel || hover.userData.displayName || 'Objek',
-        category: hoverType === 'faucet' ? 'sink' : 'other',
-        name: hoverType === 'faucet' ? 'wastafel' : hover.userData.windowName || 'window',
-        movable: false,
-      } as InteractiveObject;
-      targetHint = this.interaction.getHoverLabel?.() ?? INTERACT_PROMPT;
-    } else if (hitboxObj) {
-      // Crosshair on other hitbox-enabled object
-      targetObj = hitboxObj;
-      const analyzable = !NON_ANALYZABLE_CATEGORIES.has(hitboxObj.category);
-      if (hitboxObj.category === 'fridge') {
-        targetHint = '[F] Buka/Tutup Pintu';
-      } else if (hitboxObj.category === 'stove' || (hitboxObj.category === 'other' && hitboxObj.name === 'panci')) {
-        targetHint = '';
-      } else if (analyzable) {
-        targetHint = 'Klik: Analisis';
-      }
-    }
-
-    if (targetObj) {
-      this.promptText.textContent = targetHint
-        ? `${targetObj.displayName} — ${targetHint}`
-        : targetObj.displayName;
+    if (hover && hoverType && hoverType !== 'none') {
+      // Crosshair on interactable object (faucet, window, stove, fridge)
+      const label = this.interaction.getHoverLabel?.() ?? INTERACT_PROMPT;
+      this.promptText.textContent = label;
       this.interactionPrompt.style.display = 'block';
 
-      if (this.mobileControls) this.mobileControls.showMoveButton(targetObj.movable);
+      if (this.mobileControls) this.mobileControls.showMoveButton(false);
 
       if (input.interact && !input.interactKey) {
-        if (hover && hoverType && (hoverType === 'faucet' || hoverType === 'window')) {
-          const wasFaucetOpen = hoverType === 'faucet' && this.interaction.isFaucetOpen();
-          this.interaction.tryInteract();
-          if (hoverType === 'faucet' && !wasFaucetOpen && this.interaction.isFaucetOpen()) {
-            this.scheduleCarrotCleanPrompt();
-          }
-        } else if (targetObj.category !== 'fridge' && targetObj.category !== 'stove' && targetObj.name !== 'panci') {
-          const analyzable = !NON_ANALYZABLE_CATEGORIES.has(targetObj.category);
-          if (analyzable) {
-            this.showErgonomics(targetObj);
-          }
+        const wasFaucetOpen = hoverType === 'faucet' && this.interaction.isFaucetOpen();
+        this.interaction.tryInteract();
+        if (hoverType === 'faucet' && !wasFaucetOpen && this.interaction.isFaucetOpen()) {
+          this.scheduleCarrotCleanPrompt();
         }
       }
     } else {
+      // No interactable object in crosshair
       this.interactionPrompt.style.display = 'none';
       if (this.mobileControls) this.mobileControls.showMoveButton(false);
     }

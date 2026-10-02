@@ -50,10 +50,7 @@ export type KitchenObjectCategory =
   | 'counter'
   | 'stove'
   | 'sink'
-  | 'fridge'
-  | 'cabinet'
-  | 'prep_area'
-  | 'other';
+  | 'fridge';
 
 export interface ErgonomicsResult {
   score: number;

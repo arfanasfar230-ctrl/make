@@ -20,7 +20,7 @@ export class StoveFireMinigame {
   private timerId: ReturnType<typeof setTimeout> | null = null;
   private animationId: number | null = null;
   private startTime: number = 0;
-  private timeLimit = 4000;
+  private timeLimit = 6000;
   private hasCompleted = false;
 
   constructor(ctx: SceneContext, options: StoveFireMinigameOptions = {}) {
@@ -340,6 +340,7 @@ export class StoveFireMinigame {
   public open(): void {
     if (this.isOpen) return;
     this.isOpen = true;
+    document.exitPointerLock?.();
     this.container.style.display = 'block';
     this.disableMainSceneInteraction();
     this.generateNewChallenge();

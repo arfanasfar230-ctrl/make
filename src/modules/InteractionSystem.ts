@@ -3,10 +3,12 @@ import type { SceneContext } from './types';
 import { WindowSystem, WindowData } from './WindowSystem';
 import { FaucetWater } from './FaucetWater';
 import { computeFaucetWaterAnchor } from './AssetLoader';
+import { FridgeInteractionSystem } from './FridgeInteractionSystem';
+import { StoveFireMinigame } from './StoveFireMinigame';
 
-export const INTERACT_PROMPT = 'F / Klik untuk berinteraksi';
+export const INTERACT_PROMPT = 'klik/f untuk berinteraksi';
 
-export type InteractableType = 'faucet' | 'window' | 'none';
+export type InteractableType = 'faucet' | 'window' | 'stove' | 'fridge' | 'none';
 
 export interface InteractionTarget {
   object: THREE.Object3D;
@@ -22,12 +24,16 @@ export class InteractionSystem {
   private roots: THREE.Object3D[] = [];
   private faucetRoot: THREE.Object3D | null = null;
   private windowRoots: Map<string, THREE.Object3D> = new Map();
+  private fridgeRoot: THREE.Object3D | null = null;
+  private stoveRoot: THREE.Object3D | null = null;
   private hovered: THREE.Object3D | null = null;
   private hoveredType: InteractableType = 'none';
   private highlightMats: Array<{ mat: THREE.Material & { emissive?: THREE.Color }; hex: number }> = [];
   private windowSystem: WindowSystem;
   private water: FaucetWater | null = null;
   private readonly hoverEmissive = 0x1d3a4a;
+  private fridgeInteraction: FridgeInteractionSystem | null = null;
+  private stoveFireMinigame: StoveFireMinigame | null = null;
 
   constructor(ctx: SceneContext) {
     this.ctx = ctx;
@@ -42,8 +48,6 @@ export class InteractionSystem {
         if (child.userData.interactable === true) {
           this.roots.push(child);
           if (child.userData.interaction === 'faucet') {
-            // Prefer the faucet that carries a water anchor (the real spout
-            // mesh); otherwise keep the last faucet found.
             if (child.userData.faucet) {
               faucetWithWater = child;
             } else {
@@ -53,6 +57,14 @@ export class InteractionSystem {
         }
         if (child.userData.interactable === true && child.userData.interaction === 'window') {
           this.windowRoots.set(child.userData.windowName, child);
+        }
+        if (child.userData.isFridge === true || child.name === 'kulkas') {
+          this.fridgeRoot = child;
+          this.roots.push(child);
+        }
+        if (child.userData.interaction === 'stove' || child.name === 'kompor') {
+          this.stoveRoot = child;
+          this.roots.push(child);
         }
       });
       if (faucetWithWater) this.faucetRoot = faucetWithWater;
@@ -70,8 +82,6 @@ export class InteractionSystem {
         }
       }
 
-      // Resolve the water anchor (world spout tip + basin splash Y). Prefer the
-      // data stamped at load time; recompute from the spout geometry otherwise.
       let nozzle: THREE.Vector3 | undefined;
       let splashY: number | undefined;
       const stored = this.faucetRoot.userData.faucet as
@@ -98,11 +108,18 @@ export class InteractionSystem {
     }
   }
 
+  public setFridgeInteraction(sys: FridgeInteractionSystem): void {
+    this.fridgeInteraction = sys;
+  }
+
+  public setStoveFireMinigame(game: StoveFireMinigame): void {
+    this.stoveFireMinigame = game;
+  }
+
   public getWindowSystem(): WindowSystem {
     return this.windowSystem;
   }
 
-  /** Raycast from the camera center; update hover highlight. */
   public update(delta: number): THREE.Object3D | null {
     if (this.roots.length > 0) {
       const S = Math.max(this.ctx.sceneScale, 1e-6);
@@ -122,7 +139,6 @@ export class InteractionSystem {
     return this.hovered;
   }
 
-  /** Walk up from a hit child mesh to the tagged interactable parent. */
   private findInteractable(obj: THREE.Object3D | null): THREE.Object3D | null {
     let node = obj;
     while (node) {
@@ -154,17 +170,13 @@ export class InteractionSystem {
 
   public getHoverLabel(): string | null {
     if (!this.hovered) return null;
-    if (this.hoveredType === 'faucet') return 'F / Klik - Nyalakan/Matikan Kran';
-    if (this.hoveredType === 'window') return 'F / Klik - Buka/Tutup Jendela';
+    if (this.hoveredType === 'faucet') return 'klik/f untuk menyalakan/mematikan kran';
+    if (this.hoveredType === 'window') return 'klik/f untuk membuka/menutup jendela';
+    if (this.hoveredType === 'stove') return 'klik/f untuk menyalakan/mematikan kompor';
+    if (this.hoveredType === 'fridge') return 'klik/f untuk membuka/menutup kulkas';
     return INTERACT_PROMPT;
   }
 
-  /**
-   * Run the interaction for the hovered object.
-   * Faucet: toggles the water + userData.faucetOpen (CLOSED <-> OPEN).
-   * Window: toggles OPEN <-> CLOSED.
-   * Returns true when something happened.
-   */
   public tryInteract(): boolean {
     if (!this.hovered) return false;
     if (this.hoveredType === 'faucet') {
@@ -180,6 +192,14 @@ export class InteractionSystem {
         this.windowSystem.toggleWindow(windowName);
         return true;
       }
+    }
+    if (this.hoveredType === 'fridge') {
+      this.fridgeInteraction?.toggleFridgeDoor();
+      return true;
+    }
+    if (this.hoveredType === 'stove') {
+      this.stoveFireMinigame?.open();
+      return true;
     }
     return false;
   }

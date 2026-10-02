@@ -7,9 +7,6 @@ const CATEGORY_DISPLAY_NAMES: Record<KitchenObjectCategory, string> = {
   stove: 'Kompor',
   sink: 'Wastafel',
   fridge: 'Kulkas',
-  cabinet: 'Kabinet Dapur',
-  prep_area: 'Area Persiapan',
-  other: 'Objek Dapur',
 };
 
 /**
@@ -31,21 +28,21 @@ const GROUP_CATEGORY: Record<string, KitchenObjectCategory | 'skip'> = {
   G_1_extern_wall: 'skip',
   G_3_extern_wall: 'skip',
   interiors: 'skip',
-  G_1: 'cabinet',      // tall wall cabinet on the west wall
+  G_1: 'skip',       // tall wall cabinet on the west wall (removed)
   G_2: 'skip',         // exterior wall door on the east wall (replaced by dedicated 3D Refrigerator model)
   G_7: 'counter',
   G_8: 'counter',
   G_9: 'counter',
-  G_10: 'stove',       // kompor
+  G_10: 'skip',        // kompor asli (dinonaktifkan, diganti panci)
   G_16: 'counter',
   G_17: 'counter',
   G_118: 'counter',
-  G_12: 'cabinet',     // upper cabinet row (middle)
-  G_19: 'cabinet',
-  G_20: 'cabinet',
-  G_21: 'cabinet',
-  G_24: 'cabinet',
-  G_25: 'cabinet',
+  G_12: 'skip',        // upper cabinet row (middle) (removed)
+  G_19: 'skip',
+  G_20: 'skip',
+  G_21: 'skip',
+  G_24: 'skip',
+  G_25: 'skip',
   G_58: 'skip',        // wall sign/decor above counter
   G_67: 'skip',        // window
   G_68: 'skip',        // window
@@ -59,7 +56,7 @@ const GROUP_CATEGORY: Record<string, KitchenObjectCategory | 'skip'> = {
 /** Sub-nodes inside G_121 (the long worktop) that describe distinct zones. */
 const G121_SUBGROUP_CATEGORY: Record<string, KitchenObjectCategory | 'skip'> = {
   Mesh9: 'sink',       // _ra1: sink basin + faucet
-  Mesh10: 'prep_area', // _ra2: countertop fixtures / prep cluster
+  Mesh10: 'skip',      // _ra2: countertop fixtures / prep cluster (removed)
   Mesh11: 'counter',   // the worktop slab itself
 };
 
@@ -79,15 +76,8 @@ const NON_MOVABLE_GROUPS = new Set<string>([
   'G_7',
   'G_8',
   'G_9',
-  'G_10',
-  'G_12',
   'G_16',
   'G_17',
-  'G_19',
-  'G_20',
-  'G_21',
-  'G_24',
-  'G_25',
   'G_118',
 ]);
 
@@ -619,15 +609,10 @@ export class AssetLoader {
     if (floorH <= 0.18) {
       if (h >= 1.7 && footprint >= 0.3 && length >= 0.4) return 'fridge';
       if (topM >= 0.7 && topM <= 1.1 && h >= 0.3) return 'counter';
-      if (h >= 0.35) return 'cabinet';
       return 'skip';
     }
     if (h < 0.35 && topM >= 0.7 && topM <= 1.15 && footprint >= 0.4 && length >= 0.4) {
       return 'counter';
-    }
-    if (floorH >= 1.2 && floorH <= 1.55 && h <= 1.1 && footprint >= 0.25) return 'cabinet';
-    if (floorH >= 0.6 && floorH <= 1.3 && h >= 0.15) {
-      return footprint <= 0.7 && length <= 1.8 ? 'cabinet' : 'skip';
     }
     return 'skip';
   }
@@ -758,18 +743,16 @@ export class AssetLoader {
       // Wastafel terkunci: hanya interaksi kran (FaucetWater), tidak bisa
       // dipindah/diputar lewat mode Pindah & Putar.
       movable: category !== 'sink' && !NON_MOVABLE_GROUPS.has(obj.name),
-      // Hitbox biru pembidik dimatikan untuk meja kerja (counter) dan kabinet
-      // dapur: keduanya menempel tembok dan kotaknya menutupi perabot di
-      // depannya. Hitbox wastafel, kompor, area persiapan, dan panci tetap
-      // menyala walau wastafel tidak bisa dipindah.
-      hitbox: category !== 'counter' && category !== 'cabinet' && category !== 'stove',
+      // Hitbox biru pembidik dimatikan untuk meja kerja (counter).
+      // Hitbox wastafel, kompor (panci), kulkas tetap menyala.
+      hitbox: category !== 'counter',
     });
   }
 
   /**
    * Base-room groups (G_10, G_8, ...) may include taller elements (backsplash,
    * tall side panels) so their bounding-box top overstates the work surface.
-   * Snap the work-surface height of every counter/sink/prep object to the
+   * Snap the work-surface height of every counter/sink object to the
    * authoritative worktop top — the G_121 slab — so ergonomics evaluate against
    * the real working height (~0.85–0.9m) instead of a decorative element.
    */
@@ -794,7 +777,7 @@ export class AssetLoader {
     if (workRefY === undefined) return;
 
     for (const obj of ctx.interactiveObjects) {
-      if (obj.category !== 'counter' && obj.category !== 'prep_area' && obj.category !== 'sink') continue;
+      if (obj.category !== 'counter' && obj.category !== 'sink') continue;
       if (Math.abs(obj.surfaceY - workRefY) / S > 0.08) {
         obj.surfaceY = workRefY;
       }
