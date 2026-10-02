@@ -26,7 +26,7 @@ const GLB_BASE = (() => {
 })();
 
 // Jeda setelah kran dinyalakan sebelum popup membersihkan wortel muncul.
-const CARROT_CLEAN_DELAY_MS = 4300;
+const CARROT_CLEAN_DELAY_MS = 2300;
 
 // Objek yang tidak punya analisis ergonomi lewat tombol [E]. Kulkas, wastafel,
 // dan kompor hanya punya interaksi lewat [F] atau klik, sedangkan jendela punya
@@ -339,6 +339,10 @@ kitchenModel: null,
         },
         onClose: () => {
           console.log('Carrot cleaner closed');
+          // Setelah selesai membersihkan, kembalikan ke mode crosshair (pointer lock)
+          if (this.currentMode === 'desktop' && this.desktopControls) {
+            this.desktopControls.requestPointerLock();
+          }
           // Setelah selesai membersihkan, kembalikan ke popup opsi kran
           // supaya player bisa mematikan kran.
           if (this.carrotCleanSucceeded) {
@@ -543,6 +547,7 @@ kitchenModel: null,
       surfaceY: finalBox.max.y,
       // Kulkas terkunci di posisinya: hanya interaksi buka/tutup pintu ([F]).
       movable: false,
+      hitbox: true,
     });
 
     this.fridgeInteraction = new FridgeInteractionSystem(this.ctx, this.collision);
@@ -865,9 +870,6 @@ kitchenModel: null,
       }
 
       if (e.code === 'KeyF') {
-        // Kulkas hanya bisa diinteraksi lewat [F] (buka/tutup pintu). Raycast
-        // hover fridge sudah membatasi jarak (INTERACTION_DISTANCE) dan memakai
-        // crosshair saat pointer terkunci.
         if (this.fridgeInteraction?.isFridgeHovered()) {
           this.fridgeInteraction.toggleFridgeDoor();
         } else {
@@ -879,8 +881,12 @@ kitchenModel: null,
               document.exitPointerLock();
               this.stoveFireMinigame.open();
             }
-          } else if (hover && hoverType && hoverType !== 'none') {
-            this.showInteractionPanel();
+          } else if (hover && hoverType && (hoverType === 'faucet' || hoverType === 'window')) {
+            const wasFaucetOpen = hoverType === 'faucet' && this.interaction?.isFaucetOpen();
+            this.interaction?.tryInteract();
+            if (hoverType === 'faucet' && !wasFaucetOpen && this.interaction?.isFaucetOpen()) {
+              this.scheduleCarrotCleanPrompt();
+            }
           }
         }
       }
@@ -1061,7 +1067,7 @@ kitchenModel: null,
   private showInteractionPanel(): void {
     const hover = this.interaction?.getHover();
     const hoverType = this.interaction?.getHoverType?.();
-    if (!hover || !hoverType || hoverType === 'none') return;
+    if (!hover || !hoverType || hoverType === 'none' || hoverType === 'faucet' || hoverType === 'window') return;
 
     document.exitPointerLock?.();
 
@@ -1069,38 +1075,6 @@ kitchenModel: null,
 
     const title = this.interactionPanel.querySelector('h4')!;
     const label = hover.userData.windowLabel || hover.userData.displayName || 'Objek';
-
-    if (hoverType === 'faucet') {
-      title.textContent = 'Kran Wastafel';
-      const isOpen = this.interaction.isFaucetOpen();
-
-      const toggleBtn = document.createElement('button');
-      toggleBtn.className = 'interaction-option-btn';
-      toggleBtn.textContent = isOpen ? 'Matikan Kran' : 'Nyalakan Kran';
-      toggleBtn.addEventListener('click', () => {
-        this.interaction.tryInteract();
-        this.hideInteractionPanel();
-        // Setelah kran menyala, aus popup pembersih wortel muncul beberapa
-        // detik kemudian.
-        if (this.interaction.isFaucetOpen()) {
-          this.scheduleCarrotCleanPrompt();
-        }
-      });
-      this.interactionPanelOptions.appendChild(toggleBtn);
-    } else if (hoverType === 'window') {
-      title.textContent = label;
-      const windowName = hover.userData.windowName;
-      const isOpen = this.interaction.getWindowSystem().isWindowOpen(windowName);
-
-      const toggleBtn = document.createElement('button');
-      toggleBtn.className = 'interaction-option-btn';
-      toggleBtn.textContent = isOpen ? 'Tutup Jendela' : 'Buka Jendela';
-      toggleBtn.addEventListener('click', () => {
-        this.interaction.tryInteract();
-        this.hideInteractionPanel();
-      });
-      this.interactionPanelOptions.appendChild(toggleBtn);
-    }
 
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'interaction-option-btn cancel';
@@ -1124,7 +1098,10 @@ kitchenModel: null,
     if (this.faucetCarrotTimer !== null) clearTimeout(this.faucetCarrotTimer);
     this.faucetCarrotTimer = setTimeout(() => {
       this.faucetCarrotTimer = null;
-      if (!this.carrotCleaner?.isOpened()) this.carrotCleaner.open();
+      if (!this.carrotCleaner?.isOpened()) {
+        document.exitPointerLock?.();
+        this.carrotCleaner.open();
+      }
     }, CARROT_CLEAN_DELAY_MS);
   }
 
@@ -1302,50 +1279,65 @@ kitchenModel: null,
       this.updateReachIndicator();
     }
 
-    // Show prompt based on hitbox-targeted object (what player is LOOKING at) rather than just proximity
-    const gazed = this.hitboxTargetObj;
-    const nearest = gazed ?? this.ergonomics.findNearestObject(this.player.getPosition());
-    if (nearest) {
-      // Tombol [E] tidak lagi dipakai untuk analisis: panel ergonomi hanya
-      // terbuka lewat klik / tombol sentuh / trigger VR. Kulkas tetap punya
-      // [F] untuk pintu, wastafel dibuka lewat kran (label crosshair hover).
-      const analyzable = !NON_ANALYZABLE_CATEGORIES.has(nearest.category);
-      let hint = '';
-      if (nearest.category === 'fridge') {
-        hint = '[F] Buka/Tutup Pintu';
-      } else if (nearest.category === 'other' && nearest.name === 'panci') {
-        hint = '[F] Atur Level Api';
+    // Crosshair-driven interaction for faucet/window
+    const hover = this.interaction.update(delta);
+    const hoverType = this.interaction.getHoverType?.();
+
+    // Hitbox raycast for other objects (stove, fridge, etc.)
+    this.updateHitboxHelper();
+    const hitboxObj = this.hitboxTargetObj;
+
+    // Determine what the crosshair is actually pointing at
+    let targetObj: InteractiveObject | null = null;
+    let targetHint = '';
+
+    if (hover && hoverType && (hoverType === 'faucet' || hoverType === 'window')) {
+      // Crosshair on faucet or window - use interaction system
+      targetObj = {
+        displayName: hover.userData.windowLabel || hover.userData.displayName || 'Objek',
+        category: hoverType === 'faucet' ? 'sink' : 'other',
+        name: hoverType === 'faucet' ? 'wastafel' : hover.userData.windowName || 'window',
+        movable: false,
+      } as InteractiveObject;
+      targetHint = this.interaction.getHoverLabel?.() ?? INTERACT_PROMPT;
+    } else if (hitboxObj) {
+      // Crosshair on other hitbox-enabled object
+      targetObj = hitboxObj;
+      const analyzable = !NON_ANALYZABLE_CATEGORIES.has(hitboxObj.category);
+      if (hitboxObj.category === 'fridge') {
+        targetHint = '[F] Buka/Tutup Pintu';
+      } else if (hitboxObj.category === 'stove' || (hitboxObj.category === 'other' && hitboxObj.name === 'panci')) {
+        targetHint = '';
       } else if (analyzable) {
-        hint = 'Klik: Analisis';
+        targetHint = 'Klik: Analisis';
       }
-      this.promptText.textContent = hint
-        ? `${nearest.displayName} — ${hint}`
-        : nearest.displayName;
+    }
+
+    if (targetObj) {
+      this.promptText.textContent = targetHint
+        ? `${targetObj.displayName} — ${targetHint}`
+        : targetObj.displayName;
       this.interactionPrompt.style.display = 'block';
 
-      // Show the mobile move button only when near a moveable object
-      if (this.mobileControls) this.mobileControls.showMoveButton(nearest.movable);
+      if (this.mobileControls) this.mobileControls.showMoveButton(targetObj.movable);
 
-      if (input.interact && !input.interactKey && analyzable) {
-        this.showErgonomics(nearest);
+      if (input.interact && !input.interactKey) {
+        if (hover && hoverType && (hoverType === 'faucet' || hoverType === 'window')) {
+          const wasFaucetOpen = hoverType === 'faucet' && this.interaction.isFaucetOpen();
+          this.interaction.tryInteract();
+          if (hoverType === 'faucet' && !wasFaucetOpen && this.interaction.isFaucetOpen()) {
+            this.scheduleCarrotCleanPrompt();
+          }
+        } else if (targetObj.category !== 'fridge' && targetObj.category !== 'stove' && targetObj.name !== 'panci') {
+          const analyzable = !NON_ANALYZABLE_CATEGORIES.has(targetObj.category);
+          if (analyzable) {
+            this.showErgonomics(targetObj);
+          }
+        }
       }
     } else {
       this.interactionPrompt.style.display = 'none';
       if (this.mobileControls) this.mobileControls.showMoveButton(false);
-    }
-
-    // Crosshair-driven interaction wins over the proximity prompt. Panel kran
-    // dan jendela hanya dibuka lewat [F] / klik / tombol sentuh / trigger VR —
-    // tombol [E] sengaja diabaikan agar tidak membuka panel analisis.
-    const hover = this.interaction.update(delta);
-    if (hover) {
-      const label = this.interaction.getHoverLabel?.() ?? INTERACT_PROMPT;
-      this.promptText.textContent = label;
-      this.interactionPrompt.style.display = 'block';
-
-      if (input.interact && !input.interactKey) {
-        this.showInteractionPanel();
-      }
     }
 
     this.playerPosEl.textContent = `Pos: ${this.player.state.position.x.toFixed(2)}, ${this.player.state.position.y.toFixed(2)}, ${this.player.state.position.z.toFixed(2)}`;

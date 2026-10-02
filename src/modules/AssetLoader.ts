@@ -762,7 +762,7 @@ export class AssetLoader {
       // dapur: keduanya menempel tembok dan kotaknya menutupi perabot di
       // depannya. Hitbox wastafel, kompor, area persiapan, dan panci tetap
       // menyala walau wastafel tidak bisa dipindah.
-      hitbox: category !== 'counter' && category !== 'cabinet',
+      hitbox: category !== 'counter' && category !== 'cabinet' && category !== 'stove',
     });
   }
 
