@@ -4,6 +4,7 @@ import { FridgeInteractionSystem, FridgeState, FridgeDoorState } from './FridgeI
 import { CarrotCleaner } from './CarrotCleaner';
 import { StoveFireMinigame } from './StoveFireMinigame';
 import { WindowSystem } from './WindowSystem';
+import { ServingSystem } from './ServingSystem';
 
 export type ErgonomicStep =
   | 'FRIDGE'
@@ -11,6 +12,7 @@ export type ErgonomicStep =
   | 'CLEAN_CARROT'
   | 'WINDOW'
   | 'STOVE'
+  | 'SERVE'
   | 'FINISHED';
 
 export interface ErgonomicAssessmentConfig {
@@ -67,6 +69,7 @@ const STEP_DISTANCE_RANGES: Record<string, StepDistanceRange> = {
   CLEAN_CARROT: { min: 0.5, max: 0.7 },
   WINDOW: { min: 0.6, max: 0.8 },
   STOVE: { min: 0.5, max: 0.7 },
+  SERVE: { min: 0.5, max: 0.7 },
 };
 
 export class ErgonomicAssessmentSystem {
@@ -76,6 +79,7 @@ export class ErgonomicAssessmentSystem {
   private carrotCleaner: CarrotCleaner | null = null;
   private stoveFireMinigame: StoveFireMinigame | null = null;
   private windowSystem: WindowSystem | null = null;
+  private servingSystem: ServingSystem | null = null;
 
   private currentStep: ErgonomicStep = 'FRIDGE';
   private score = 100;
@@ -83,7 +87,7 @@ export class ErgonomicAssessmentSystem {
   private finished = false;
 
   private stepStates: Map<ErgonomicStep, StepState> = new Map();
-  private stepOrder: ErgonomicStep[] = ['FRIDGE', 'TAKE_CARROT', 'CLEAN_CARROT', 'WINDOW', 'STOVE'];
+  private stepOrder: ErgonomicStep[] = ['FRIDGE', 'TAKE_CARROT', 'CLEAN_CARROT', 'WINDOW', 'STOVE', 'SERVE'];
 
   private lastDistance = 0;
   private lastDistanceStatus: 'tooClose' | 'ergonomic' | 'tooFar' = 'ergonomic';
@@ -102,6 +106,7 @@ export class ErgonomicAssessmentSystem {
   private carrotCleanCompleted = false;
   private windowOpened = false;
   private stoveMinigameCompleted = false;
+  private foodServed = false;
   private faucetOn = false;
 
   constructor(ctx: SceneContext, config?: Partial<ErgonomicAssessmentConfig>) {
@@ -127,6 +132,10 @@ export class ErgonomicAssessmentSystem {
     this.carrotCleaner = carrotCleaner;
     this.stoveFireMinigame = stoveFireMinigame;
     this.windowSystem = windowSystem;
+  }
+
+  public setServingSystem(sys: ServingSystem): void {
+    this.servingSystem = sys;
   }
 
   public setOnResultChange(callback: (result: ErgonomicAssessmentResult) => void): void {
@@ -160,6 +169,9 @@ export class ErgonomicAssessmentSystem {
         break;
       case 'STOVE':
         this.currentTargetObject = this.findObjectByName('kompor');
+        break;
+      case 'SERVE':
+        this.currentTargetObject = this.findObjectByName('meja_saji');
         break;
       default:
         this.currentTargetObject = null;
@@ -230,6 +242,9 @@ export class ErgonomicAssessmentSystem {
         break;
       case 'STOVE':
         this.updateStoveStep(playerState, input, stepState);
+        break;
+      case 'SERVE':
+        this.updateServeStep(playerState, input, stepState);
         break;
     }
   }
@@ -312,6 +327,22 @@ export class ErgonomicAssessmentSystem {
     }
   }
 
+  private updateServeStep(playerState: PlayerState, input: ControlInput, stepState: StepState): void {
+    const isReady = this.servingSystem?.isReadyToServe() ?? false;
+
+    this.lastActivity = 'Menghidangkan wortel rebus';
+    this.lastObjectStatus = this.foodServed
+      ? 'Terhidang di meja saji'
+      : isReady
+        ? 'Siap dihidahkan'
+        : 'Belum matang';
+    this.lastActivityStatus = this.foodServed ? 'Selesai' : 'Berlangsung';
+
+    if (this.foodServed) {
+      this.completeServeAssessment();
+    }
+  }
+
   public completeFridgeAssessment(): void {
     if (this.currentStep !== 'FRIDGE') return;
     this.completeStep('FRIDGE');
@@ -333,12 +364,22 @@ export class ErgonomicAssessmentSystem {
     this.completeStep('STOVE');
   }
 
+  public completeServeAssessment(): void {
+    if (this.currentStep !== 'SERVE') return;
+    this.completeStep('SERVE');
+  }
+
   public onCarrotCleanComplete(): void {
     this.carrotCleanCompleted = true;
   }
 
   public onStoveMinigameComplete(): void {
     this.stoveMinigameCompleted = true;
+  }
+
+  /** Dipanggil ServingSystem saat wortel rebus diletakkan di meja saji. */
+  public onFoodServed(): void {
+    this.foodServed = true;
   }
 
   public onFridgeDoorCollision(): void {
@@ -368,6 +409,7 @@ export class ErgonomicAssessmentSystem {
     this.carrotCleanCompleted = false;
     this.windowOpened = false;
     this.stoveMinigameCompleted = false;
+    this.foodServed = false;
     this.faucetOn = false;
   }
 
@@ -388,7 +430,7 @@ export class ErgonomicAssessmentSystem {
     return Math.sqrt(dx * dx + dz * dz) / this.ctx.sceneScale;
   }
 
-  public canInteract(objectType: 'fridge' | 'faucet' | 'window' | 'stove'): boolean {
+  public canInteract(objectType: 'fridge' | 'faucet' | 'window' | 'stove' | 'serving_table'): boolean {
     if (this.finished) return false;
 
     const requiredStepMap: Record<string, ErgonomicStep> = {
@@ -396,6 +438,7 @@ export class ErgonomicAssessmentSystem {
       faucet: 'CLEAN_CARROT',
       window: 'WINDOW',
       stove: 'STOVE',
+      serving_table: 'SERVE',
     };
 
     return this.currentStep === requiredStepMap[objectType];
@@ -500,7 +543,7 @@ export function createErgonomicAssessmentPanel(): HTMLElement {
 
     <div style="margin-bottom: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05);">
       <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Progress</div>
-      <div id="ergo-progress" style="font-size: 0.85rem; font-weight: 600; color: #e94560;">1 / 5</div>
+      <div id="ergo-progress" style="font-size: 0.85rem; font-weight: 600; color: #e94560;">1 / 6</div>
     </div>
   `;
 

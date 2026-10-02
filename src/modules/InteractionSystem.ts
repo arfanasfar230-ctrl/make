@@ -6,10 +6,11 @@ import { computeFaucetWaterAnchor } from './AssetLoader';
 import { FridgeInteractionSystem } from './FridgeInteractionSystem';
 import { StoveFireMinigame } from './StoveFireMinigame';
 import { ErgonomicAssessmentSystem } from './ErgonomicAssessmentSystem';
+import { ServingSystem } from './ServingSystem';
 
 export const INTERACT_PROMPT = 'klik/f untuk berinteraksi';
 
-export type InteractableType = 'faucet' | 'window' | 'stove' | 'fridge' | 'none';
+export type InteractableType = 'faucet' | 'window' | 'stove' | 'fridge' | 'serving_table' | 'none';
 
 export interface InteractionTarget {
   object: THREE.Object3D;
@@ -36,6 +37,7 @@ export class InteractionSystem {
   private fridgeInteraction: FridgeInteractionSystem | null = null;
   private stoveFireMinigame: StoveFireMinigame | null = null;
   private ergonomicAssessment: ErgonomicAssessmentSystem | null = null;
+  private servingSystem: ServingSystem | null = null;
 
   constructor(ctx: SceneContext) {
     this.ctx = ctx;
@@ -122,6 +124,21 @@ export class InteractionSystem {
     this.ergonomicAssessment = sys;
   }
 
+  /**
+   * Mendaftarkan root interaksi yang dimuat SETELAH constructor, mis. set
+   * penyajian (low_poly_tableware.glb) yang di-load sesudah InteractionSystem
+   * dibuat. Idempotent agar root yang sama tidak ter-raycast dua kali.
+   */
+  public registerInteractable(root: THREE.Object3D): void {
+    if (!this.roots.includes(root)) {
+      this.roots.push(root);
+    }
+  }
+
+  public setServingSystem(sys: ServingSystem): void {
+    this.servingSystem = sys;
+  }
+
   public getWindowSystem(): WindowSystem {
     return this.windowSystem;
   }
@@ -180,6 +197,7 @@ export class InteractionSystem {
     if (this.hoveredType === 'window') return 'klik/f untuk membuka/menutup jendela';
     if (this.hoveredType === 'stove') return 'klik/f untuk menyalakan/mematikan kompor';
     if (this.hoveredType === 'fridge') return 'klik/f untuk membuka/menutup kulkas';
+    if (this.hoveredType === 'serving_table') return 'klik/f untuk menghidangkan makanan';
     return INTERACT_PROMPT;
   }
 
@@ -209,6 +227,10 @@ export class InteractionSystem {
     if (this.hoveredType === 'stove') {
       this.stoveFireMinigame?.open();
       return true;
+    }
+    if (this.hoveredType === 'serving_table') {
+      // Satu aksi sekali jalan: wortel rebus langsung diletakkan di piring.
+      return this.servingSystem?.serve() ?? false;
     }
     return false;
   }

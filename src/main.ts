@@ -17,6 +17,7 @@ import { ProximityTeleportSystem } from './modules/ProximityTeleportSystem';
 import { CarrotCleaner } from './modules/CarrotCleaner';
 import { StoveFireMinigame } from './modules/StoveFireMinigame';
 import { ErgonomicAssessmentSystem, createErgonomicAssessmentPanel, ErgonomicAssessmentResult } from './modules/ErgonomicAssessmentSystem';
+import { ServingSystem } from './modules/ServingSystem';
 
 const GLB_BASE = (() => {
   try {
@@ -86,6 +87,8 @@ class KitchenErgonomicsApp {
   private carrotCleaner!: CarrotCleaner;
   private stoveFireMinigame!: StoveFireMinigame;
   private ergonomicAssessment!: ErgonomicAssessmentSystem;
+  private servingSystem!: ServingSystem;
+  private servingSetNode: THREE.Object3D | null = null;
   private carrotCleanSucceeded = false;
   private faucetCarrotTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -368,6 +371,8 @@ kitchenModel: null,
         onComplete: (success: boolean, mistakes: number) => {
           console.log(`Stove minigame complete: success=${success}, mistakes=${mistakes}`);
           if (success) {
+            // Wortel dianggap matang; baru bisa dihidangkan lewat interaksi meja saji.
+            this.servingSystem?.markReady();
             this.ergonomicAssessment?.onStoveMinigameComplete();
           }
         }
@@ -378,6 +383,18 @@ kitchenModel: null,
 
       await this.loadServingSet();
 
+      // Wortel rebus dimuat saat loading lalu disembunyikan; baru ditampilkan
+      // di piring saat pemain berinteraksi dengan meja saji.
+      this.servingSystem = new ServingSystem(this.ctx, {
+        onServed: () => {
+          this.ergonomicAssessment?.onFoodServed();
+          this.showToast('✅ Wortel rebus berhasil dihidangkan');
+        },
+      });
+      if (this.servingSetNode) {
+        await this.servingSystem.preload(this.servingSetNode);
+      }
+
       // Initialize Ergonomic Assessment System
       this.ergonomicAssessment = new ErgonomicAssessmentSystem(this.ctx);
       this.ergonomicAssessment.setDependencies(
@@ -386,6 +403,7 @@ kitchenModel: null,
         this.stoveFireMinigame,
         this.interaction.getWindowSystem()
       );
+      this.ergonomicAssessment.setServingSystem(this.servingSystem);
       const assessmentPanel = createErgonomicAssessmentPanel();
       document.getElementById('ergonomic-assessment-panel')!.appendChild(assessmentPanel);
       this.ergonomicAssessment.setPanel(document.getElementById('ergonomic-assessment-panel')!);
@@ -397,6 +415,7 @@ kitchenModel: null,
       this.interaction.setFridgeInteraction(this.fridgeInteraction);
       this.interaction.setStoveFireMinigame(this.stoveFireMinigame);
       this.interaction.setErgonomicAssessment(this.ergonomicAssessment);
+      this.interaction.setServingSystem(this.servingSystem);
 
       this.player = new PlayerController(this.ctx);
       this.debugSystem = new DebugSystem(this.ctx);
@@ -676,13 +695,17 @@ kitchenModel: null,
 
   /**
    * Memuat set penyajian (low_poly_tableware.glb) dan mendudukkannya di area
-   * bekas klaster bumbu (worktop G_121). Hanya dekorasi: tanpa hitbox, tanpa
-   * interaksi. Skala dinormalisasi ke diameter piring target
+   * bekas klaster bumbu (worktop G_121). Sekaligus target interaksi tahap
+   * SERVE: akar di-register ke InteractionSystem, userData interaksi diisi, dan
+   * satu InteractiveObject didaftarkan agar jarak ergonomis 0.5-0.7 m terukur.
+   * Tetap tidak bisa dipindah (movable:false) dan tanpa kotak biru (hitbox:false).
+   * Skala dinormalisasi ke diameter piring target
    * (SAJI_TARGET_WIDTH_M = 0.20 m) memakai mesh piring (Dish) sebagai anchor;
    * bila mesh piring tidak ditemukan, fallback ke lebar placemat
    * (SAJI_FALLBACK_WIDTH_M). Posisi Y dihitung dari raycast ke bawah
    * (findTableSurfaceY) sehingga dasar placemat menempel persis di permukaan
-   * slab (Mesh11, y≈8.8). Rotation Y = 0 sesuai orientasi asli asset.
+   * slab (Mesh11, y≈8.8). Set diputar 90° (rotation.y = Math.PI / 2) sehingga
+   * anchor hidangan harus dihitung di world space.
    */
   private async loadServingSet(): Promise<void> {
     const loader = new GLTFLoader();
@@ -744,11 +767,49 @@ kitchenModel: null,
     set.rotation.y = Math.PI / 2;
     set.name = 'meja_saji';
 
+    // Target interaksi tahap SERVE: aksi tunggal (hidahkan), tanpa opsi lain.
+    set.userData.interaction = 'serving_table';
+    set.userData.interactable = true;
+    set.userData.displayName = 'Meja Hidang';
+
     if (this.ctx.kitchenModel) {
       this.ctx.kitchenModel.add(set);
     } else {
       this.ctx.scene.add(set);
     }
+
+    // Set sudah dirotasi 90 derajat DAN baru saja di-parent, jadi world matrix
+    // harus di-refresh ulang sebelum Box3 dihitung di world space.
+    set.updateWorldMatrix(true, true);
+    const setBox = new THREE.Box3().setFromObject(set);
+    const setCenter = new THREE.Vector3();
+    setBox.getCenter(setCenter);
+    const setSize = new THREE.Vector3();
+    setBox.getSize(setSize);
+
+    let servingSurfaceY = setBox.max.y;
+    if (dish) {
+      dish.updateWorldMatrix(true, true);
+      servingSurfaceY = new THREE.Box3().setFromObject(dish).max.y;
+    }
+
+    this.ctx.interactiveObjects.push({
+      name: 'meja_saji',
+      displayName: 'Meja Hidang',
+      category: 'counter',
+      object3D: set,
+      boundingBox: setBox.clone(),
+      center: setCenter.clone(),
+      height: setSize.y,
+      surfaceY: servingSurfaceY,
+      movable: false,
+      hitbox: false,
+    });
+
+    // InteractionSystem dibuat SEBELUM set ini dimuat, jadi root-nya wajib
+    // didaftarkan manual agar crosshair bisa mengenali meja saji.
+    this.interaction.registerInteractable(set);
+    this.servingSetNode = set;
   }
 
   private async loadJendelaG1(): Promise<void> {
@@ -902,7 +963,7 @@ kitchenModel: null,
       if (e.code === 'KeyF') {
           const hover = this.interaction?.getHover();
           const hoverType = this.interaction?.getHoverType?.();
-          if (hover && hoverType && (hoverType === 'faucet' || hoverType === 'window' || hoverType === 'stove' || hoverType === 'fridge')) {
+          if (hover && hoverType && (hoverType === 'faucet' || hoverType === 'window' || hoverType === 'stove' || hoverType === 'fridge' || hoverType === 'serving_table')) {
             const wasFaucetOpen = hoverType === 'faucet' && this.interaction?.isFaucetOpen();
             this.interaction?.tryInteract();
             if (hoverType === 'faucet') {
@@ -1091,7 +1152,7 @@ kitchenModel: null,
   private showInteractionPanel(): void {
     const hover = this.interaction?.getHover();
     const hoverType = this.interaction?.getHoverType?.();
-    if (!hover || !hoverType || hoverType === 'none' || hoverType === 'faucet' || hoverType === 'window') return;
+    if (!hover || !hoverType || hoverType === 'none' || hoverType === 'faucet' || hoverType === 'window' || hoverType === 'serving_table') return;
 
     document.exitPointerLock?.();
 
@@ -1245,6 +1306,7 @@ kitchenModel: null,
       CLEAN_CARROT: 'Mencuci wortel',
       WINDOW: 'Ventilasi',
       STOVE: 'Memasak',
+      SERVE: 'Menghidahkan',
       FINISHED: 'Selesai',
     };
     if (stepEl) stepEl.textContent = stepNames[result.currentStep] || result.currentStep;
@@ -1275,7 +1337,7 @@ kitchenModel: null,
 
     const progressEl = panel.querySelector('#ergo-progress');
     const completedCount = result.stepProgress.filter(s => s.completed).length;
-    if (progressEl) progressEl.textContent = `${completedCount} / 5`;
+    if (progressEl) progressEl.textContent = `${completedCount} / 6`;
   }
 
   private onResize(): void {
