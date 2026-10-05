@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import type { SceneContext, InteractiveObject, PlayerState, ControlInput } from './types';
-import { FridgeInteractionSystem, FridgeState, FridgeDoorState } from './FridgeInteractionSystem';
+import type { SceneContext, PlayerState, ControlInput } from './types';
+import { FridgeInteractionSystem, FridgeDoorState } from './FridgeInteractionSystem';
 import { CarrotCleaner } from './CarrotCleaner';
 import { StoveFireMinigame } from './StoveFireMinigame';
 import { WindowSystem } from './WindowSystem';
@@ -15,66 +15,215 @@ export type ErgonomicStep =
   | 'SERVE'
   | 'FINISHED';
 
+/** Lima aktivitas yang dinilai, masing-masing punya pengukuran sendiri. */
+export type ActivityKey = 'KULKAS' | 'CUCI' | 'JENDELA' | 'MASAK' | 'SAJIKAN';
+
+/** Urutan tampil di panel; juga urutan penilaian. */
+export const ACTIVITY_ORDER: ActivityKey[] = ['KULKAS', 'CUCI', 'JENDELA', 'MASAK', 'SAJIKAN'];
+
+/**
+ * Parameter ergonomis satu aktivitas. Semua jarak dalam METER nyata.
+ *
+ * - `min` / `max`  : rentang ergonomis (skor 90 di kedua ujungnya)
+ * - `ideal`        : titik ideal / rata-rata (skor 100)
+ * - `mepet`        : jarak yang dianggap "sangat dekat / mepet" (skor 85)
+ * - `nearZero`     : deviasi tambahan di sisi dekat sebelum skor mencapai 0
+ * - `farZero`      : deviasi tambahan di sisi jauh sebelum skor mencapai 0
+ */
+export interface ActivityRange {
+  min: number;
+  max: number;
+  ideal: number;
+  mepet: number;
+  nearZero: number;
+  farZero: number;
+}
+
+export interface ActivitySpec {
+  key: ActivityKey;
+  label: string;
+  range: ActivityRange;
+}
+
+const ACTIVITY_SPECS: Record<ActivityKey, ActivitySpec> = {
+  KULKAS: {
+    key: 'KULKAS',
+    label: 'Mengambil Bahan dari Kulkas',
+    range: { min: 0.7, max: 1.0, ideal: 0.85, mepet: 0.5, nearZero: 0.45, farZero: 0.8 },
+  },
+  CUCI: {
+    key: 'CUCI',
+    label: 'Mencuci Wortel',
+    range: { min: 0.5, max: 0.7, ideal: 0.6, mepet: 0.4, nearZero: 0.45, farZero: 0.8 },
+  },
+  JENDELA: {
+    key: 'JENDELA',
+    label: 'Membuka Jendela',
+    range: { min: 0.6, max: 0.8, ideal: 0.7, mepet: 0.45, nearZero: 0.45, farZero: 0.8 },
+  },
+  MASAK: {
+    key: 'MASAK',
+    label: 'Memasak',
+    range: { min: 0.5, max: 0.7, ideal: 0.6, mepet: 0.4, nearZero: 0.45, farZero: 0.8 },
+  },
+  SAJIKAN: {
+    key: 'SAJIKAN',
+    label: 'Menyajikan',
+    range: { min: 0.5, max: 0.6, ideal: 0.55, mepet: 0.4, nearZero: 0.45, farZero: 0.6 },
+  },
+};
+
+/**
+ * Step mana yang memakai aktivitas mana. `TAKE_CARROT` mengikuti KULKAS (tetap
+ * di stepOrder agar mekanik tidak berubah) tapi tidak punya baris sendiri di
+ * panel karena tidak ada pengukuran terpisah.
+ */
+const STEP_ACTIVITY: Record<ErgonomicStep, ActivityKey | null> = {
+  FRIDGE: 'KULKAS',
+  TAKE_CARROT: 'KULKAS',
+  CLEAN_CARROT: 'CUCI',
+  WINDOW: 'JENDELA',
+  STOVE: 'MASAK',
+  SERVE: 'SAJIKAN',
+  FINISHED: null,
+};
+
+/** Nama node jendela yang jadi titik ukur + penentu tahap WINDOW selesai. */
+export const WINDOW_TARGET_KEY = 'jendela_g1';
+
 export interface ErgonomicAssessmentConfig {
-  penalty: {
-    tooClose: number;
-    tooFar: number;
-    fridgeDoorCollision: number;
-    failedMinigame: number;
-  };
-  perfectRunThreshold: number;
+  ranges: Record<ActivityKey, ActivityRange>;
+  /** Pengurang kecil bila pintu kulkas menabrak pemain (sisi KULKAS saja). */
+  fridgeDoorCollisionPenalty: number;
 }
 
 const DEFAULT_CONFIG: ErgonomicAssessmentConfig = {
-  penalty: {
-    tooClose: 5,
-    tooFar: 5,
-    fridgeDoorCollision: 10,
-    failedMinigame: 10,
+  ranges: {
+    KULKAS: ACTIVITY_SPECS.KULKAS.range,
+    CUCI: ACTIVITY_SPECS.CUCI.range,
+    JENDELA: ACTIVITY_SPECS.JENDELA.range,
+    MASAK: ACTIVITY_SPECS.MASAK.range,
+    SAJIKAN: ACTIVITY_SPECS.SAJIKAN.range,
   },
-  perfectRunThreshold: 100,
+  fridgeDoorCollisionPenalty: 5,
 };
 
-interface StepState {
-  completed: boolean;
-  perfect: boolean;
-  penaltyApplied: {
-    tooClose: boolean;
-    tooFar: boolean;
-    fridgeDoorCollision: boolean;
-  };
+/** Skor pada titik ideal, batas rentang, dan posisi sangat mepet. */
+const IDEAL_SCORE = 100;
+const EDGE_SCORE = 90;
+const MEPET_SCORE = 85;
+
+function clamp01(t: number): number {
+  return t < 0 ? 0 : t > 1 ? 1 : t;
+}
+
+/** Kurva mulus dengan turunan kontinu di kedua ujungnya, jadi skor tidak pernah "melompat". */
+function smoothstep(t: number): number {
+  const x = clamp01(t);
+  return x * x * (3 - 2 * x);
+}
+
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(IDEAL_SCORE, value));
+}
+
+/**
+ * Interpolasi antar-knot [deviasi, skor] yang sudah terurut menaik. Tiap
+ * segmen memakai smoothstep sehingga sambungan antar-segmen tetap mulus.
+ * Deviasi di luar knot terakhir memakai nilai knot terakhir (skor 0).
+ */
+function interpolateKnots(knots: [number, number][], deviation: number): number {
+  const d = Math.max(0, deviation);
+  for (let i = 0; i < knots.length - 1; i++) {
+    const [d0, s0] = knots[i];
+    const [d1, s1] = knots[i + 1];
+    if (d <= d1) {
+      const span = d1 - d0;
+      const t = span > 1e-9 ? (d - d0) / span : 1;
+      return s0 + (s1 - s0) * smoothstep(t);
+    }
+  }
+  return knots[knots.length - 1][1];
+}
+
+/**
+ * Skor ergonomi dari "distance from ideal distance" — bukan sekadar cek
+ * rentang/tidak. Deviasi nol dari `ideal` = 100, deviasi sejauh batas rentang
+ * (`min` atau `max`) = 90, posisi sangat mepet (`mepet`) = 85, lalu turun
+ * proporsional sampai 0. Tidak pernah ada lompatan 100 -> 0 di batas rentang.
+ */
+export function scoreActivityDistance(distanceM: number, range: ActivityRange): number {
+  if (!Number.isFinite(distanceM)) return 0;
+
+  const half = (Math.max(range.max, range.min) - Math.min(range.max, range.min)) / 2;
+  const deviation = distanceM - range.ideal;
+
+  if (deviation >= 0) {
+    return Math.round(
+      clampScore(
+        interpolateKnots(
+          [
+            [0, IDEAL_SCORE],
+            [half, EDGE_SCORE],
+            [half + range.farZero, 0],
+          ],
+          deviation
+        )
+      )
+    );
+  }
+
+  const nearGap = Math.max(0, range.min - range.mepet);
+  return Math.round(
+    clampScore(
+      interpolateKnots(
+        [
+          [0, IDEAL_SCORE],
+          [half, EDGE_SCORE],
+          [half + nearGap, MEPET_SCORE],
+          [half + nearGap + range.nearZero, 0],
+        ],
+        -deviation
+      )
+    )
+  );
+}
+
+export type ActivityRowState = 'pending' | 'live' | 'done';
+
+export interface ActivityScoreRow {
+  key: ActivityKey;
+  label: string;
+  state: ActivityRowState;
+  /** Skor final saat `done`, skor live saat `live`, null saat `pending`. */
+  score: number | null;
+  /** Jarak terakhir yang terukur (meter) — dibekukan bersama skor saat `done`. */
+  distance: number;
+  /** Jarak ideal aktivitas ini (meter), untuk teks panel. */
+  ideal: number;
 }
 
 export interface ErgonomicAssessmentResult {
   currentStep: ErgonomicStep;
-  score: number;
-  stepProgress: { step: ErgonomicStep; completed: boolean; perfect: boolean }[];
+  /** Aktivitas yang sedang diukur; null setelah semua selesai. */
+  currentActivity: ActivityKey | null;
+  activities: ActivityScoreRow[];
   distance: number;
   distanceStatus: 'tooClose' | 'ergonomic' | 'tooFar';
   activity: string;
   objectStatus: string;
   activityStatus: 'Selesai' | 'Berlangsung';
-  perfectRun: boolean;
+  completedCount: number;
+  totalCount: number;
+  /** Rata-rata 5 skor; null sampai kelima aktivitas selesai. */
+  finalScore: number | null;
   finished: boolean;
 }
-
-interface StepDistanceRange {
-  min: number;
-  max: number;
-}
-
-const STEP_DISTANCE_RANGES: Record<string, StepDistanceRange> = {
-  FRIDGE: { min: 0.7, max: 1.0 },
-  TAKE_CARROT: { min: 0.7, max: 1.0 },
-  CLEAN_CARROT: { min: 0.5, max: 0.7 },
-  WINDOW: { min: 0.6, max: 0.8 },
-  STOVE: { min: 0.5, max: 0.7 },
-  SERVE: { min: 0.5, max: 0.7 },
-};
 
 export class ErgonomicAssessmentSystem {
   private ctx: SceneContext;
   private config: ErgonomicAssessmentConfig;
+
   private fridgeInteraction: FridgeInteractionSystem | null = null;
   private carrotCleaner: CarrotCleaner | null = null;
   private stoveFireMinigame: StoveFireMinigame | null = null;
@@ -82,44 +231,68 @@ export class ErgonomicAssessmentSystem {
   private servingSystem: ServingSystem | null = null;
 
   private currentStep: ErgonomicStep = 'FRIDGE';
-  private score = 100;
-  private perfectRun = true;
   private finished = false;
 
-  private stepStates: Map<ErgonomicStep, StepState> = new Map();
   private stepOrder: ErgonomicStep[] = ['FRIDGE', 'TAKE_CARROT', 'CLEAN_CARROT', 'WINDOW', 'STOVE', 'SERVE'];
 
-  private lastDistance = 0;
+  /** Step yang sudah lewat, supaya tidak pernah maju dua kali. */
+  private completedSteps: Set<ErgonomicStep> = new Set();
+
+  /**
+   * Skor per aktivitas. `null` = belum selesai (TIDAK memakai skor aktivitas
+   * lain). Sekali terisi tidak pernah berubah lagi.
+   */
+  private activityScores: Record<ActivityKey, number | null> = {
+    KULKAS: null,
+    CUCI: null,
+    JENDELA: null,
+    MASAK: null,
+    SAJIKAN: null,
+  };
+
+  /** Jarak terakhir per aktivitas, ditulis hanya selama aktivitas itu live. */
+  private activityDistance: Record<ActivityKey, number> = {
+    KULKAS: 0,
+    CUCI: 0,
+    JENDELA: 0,
+    MASAK: 0,
+    SAJIKAN: 0,
+  };
+
+  private finalScore: number | null = null;
+
+  /** Pembacaan live untuk aktivitas yang sedang berjalan. */
+  private activeActivity: ActivityKey | null = 'KULKAS';
+  private liveDistance = 0;
+  private liveScore = 0;
+
   private lastDistanceStatus: 'tooClose' | 'ergonomic' | 'tooFar' = 'ergonomic';
   private lastActivity = '';
   private lastObjectStatus = '';
   private lastActivityStatus: 'Selesai' | 'Berlangsung' = 'Berlangsung';
 
-  private currentTargetObject: InteractiveObject | null = null;
-  private penaltyFlags: Set<string> = new Set();
-
-  private panel: HTMLElement | null = null;
-  private onResultChange: ((result: ErgonomicAssessmentResult) => void) | null = null;
+  /** Box3 statis untuk target yang tidak terdaftar di ctx.interactiveObjects (jendela). */
+  private extraTargets: Map<string, THREE.Box3> = new Map();
 
   private fridgeDoorOpened = false;
   private fridgeDoorClosed = false;
+  private fridgeCollisionHit = false;
   private carrotCleanCompleted = false;
   private windowOpened = false;
   private stoveMinigameCompleted = false;
   private foodServed = false;
   private faucetOn = false;
 
+  private panel: HTMLElement | null = null;
+  private onResultChange: ((result: ErgonomicAssessmentResult) => void) | null = null;
+
   constructor(ctx: SceneContext, config?: Partial<ErgonomicAssessmentConfig>) {
     this.ctx = ctx;
-    this.config = { ...DEFAULT_CONFIG, ...config };
-
-    this.stepOrder.forEach(step => {
-      this.stepStates.set(step, {
-        completed: false,
-        perfect: true,
-        penaltyApplied: { tooClose: false, tooFar: false, fridgeDoorCollision: false },
-      });
-    });
+    this.config = {
+      ...DEFAULT_CONFIG,
+      ...config,
+      ranges: { ...DEFAULT_CONFIG.ranges, ...(config?.ranges ?? {}) },
+    };
   }
 
   public setDependencies(
@@ -146,110 +319,169 @@ export class ErgonomicAssessmentSystem {
     this.panel = panel;
   }
 
+  /**
+   * Mendaftarkan target ukur yang tidak ada di ctx.interactiveObjects. Box3
+   * dunia diambil SEKALI karena node ini diam (jendela), sehingga computing
+   * per frame tidak diperlukan dan jaraknya stabil.
+   */
+  public registerMeasurementTarget(key: string, node: THREE.Object3D): void {
+    node.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(node);
+    if (!box.isEmpty()) this.extraTargets.set(key, box);
+  }
+
   public update(delta: number, playerState: PlayerState, input: ControlInput): void {
     if (this.finished) return;
 
-    this.updateTargetObject();
-    this.updateDistance(playerState);
-    this.updateStepProgress(playerState, input);
+    this.updateLiveDistance(playerState);
+    this.updateStepProgress();
     this.updatePanel();
   }
 
-  private updateTargetObject(): void {
-    switch (this.currentStep) {
-      case 'FRIDGE':
-      case 'TAKE_CARROT':
-        this.currentTargetObject = this.findObjectByName('kulkas');
-        break;
-      case 'CLEAN_CARROT':
-        this.currentTargetObject = this.findObjectByInteraction('faucet');
-        break;
-      case 'WINDOW':
-        this.currentTargetObject = this.findObjectByInteraction('window');
-        break;
-      case 'STOVE':
-        this.currentTargetObject = this.findObjectByName('kompor');
-        break;
-      case 'SERVE':
-        this.currentTargetObject = this.findObjectByName('meja_saji');
-        break;
-      default:
-        this.currentTargetObject = null;
-    }
+  // ---------------------------------------------------------------------------
+  // Pengukuran live
+  // ---------------------------------------------------------------------------
+
+  private rangeFor(key: ActivityKey): ActivityRange {
+    return this.config.ranges[key];
   }
 
-  private updateDistance(playerState: PlayerState): void {
-    if (!this.currentTargetObject) {
-      this.lastDistance = 0;
-      this.lastDistanceStatus = 'ergonomic';
+  private updateLiveDistance(playerState: PlayerState): void {
+    const key = STEP_ACTIVITY[this.currentStep];
+    this.activeActivity = key;
+
+    if (!key) {
+      this.liveDistance = 0;
       return;
     }
 
-    const distance = this.calculateDistance(playerState, this.currentTargetObject);
-    this.lastDistance = distance;
+    const box = this.resolveTargetBox();
+    if (!box) {
+      this.liveDistance = 0;
+      return;
+    }
 
-    const range = STEP_DISTANCE_RANGES[this.currentStep];
-    if (range) {
-      if (distance < range.min) {
-        this.lastDistanceStatus = 'tooClose';
-        this.applyPenalty('tooClose');
-      } else if (distance > range.max) {
-        this.lastDistanceStatus = 'tooFar';
-        this.applyPenalty('tooFar');
-      } else {
-        this.lastDistanceStatus = 'ergonomic';
-        this.clearPenalty('tooClose');
-        this.clearPenalty('tooFar');
-      }
+    this.liveDistance = this.calculateDistance(playerState, box);
+    this.liveScore = scoreActivityDistance(this.liveDistance, this.rangeFor(key));
+    this.lastDistanceStatus = this.classifyDistance(key, this.liveDistance);
+
+    // Hanya aktivitas yang BELUM terkunci yang boleh memperbarui jaraknya,
+    // supaya jarak aktivitas sebelumnya tidak ikut bergeser.
+    if (this.activityScores[key] === null) {
+      this.activityDistance[key] = this.liveDistance;
     }
   }
 
-  private applyPenalty(type: string): void {
-    if (this.penaltyFlags.has(type)) return;
-    this.penaltyFlags.add(type);
-
-    const penalty = this.config.penalty[type as keyof typeof this.config.penalty];
-    if (penalty) {
-      this.score = Math.max(0, this.score - penalty);
-      this.getCurrentStepState().perfect = false;
-      this.perfectRun = false;
-    }
+  private classifyDistance(key: ActivityKey, distance: number): 'tooClose' | 'ergonomic' | 'tooFar' {
+    const range = this.rangeFor(key);
+    if (distance < range.min) return 'tooClose';
+    if (distance > range.max) return 'tooFar';
+    return 'ergonomic';
   }
 
-  private clearPenalty(type: string): void {
-    this.penaltyFlags.delete(type);
-  }
-
-  private getCurrentStepState(): StepState {
-    return this.stepStates.get(this.currentStep)!;
-  }
-
-  private updateStepProgress(playerState: PlayerState, input: ControlInput): void {
-    const stepState = this.getCurrentStepState();
-
+  private resolveTargetBox(): THREE.Box3 | null {
     switch (this.currentStep) {
       case 'FRIDGE':
-        this.updateFridgeStep(playerState, input, stepState);
+      case 'TAKE_CARROT':
+        return this.findObjectByName('kulkas')?.boundingBox ?? null;
+      case 'CLEAN_CARROT':
+        return this.findObjectByInteraction('faucet')?.boundingBox ?? null;
+      case 'WINDOW':
+        // Selalu ukur jendela_g1: target ini didaftarkan lewat
+        // registerMeasurementTarget karena jendela tidak ada di
+        // ctx.interactiveObjects. Fallback hanya jika registrasi terlewat.
+        return (
+          this.extraTargets.get(WINDOW_TARGET_KEY) ??
+          this.findObjectByInteraction('window')?.boundingBox ??
+          null
+        );
+      case 'STOVE':
+        return this.findObjectByName('kompor')?.boundingBox ?? null;
+      case 'SERVE':
+        return this.findObjectByName('meja_saji')?.boundingBox ?? null;
+      default:
+        return null;
+    }
+  }
+
+  private findObjectByName(name: string) {
+    return this.ctx.interactiveObjects.find(o => o.name === name) || null;
+  }
+
+  private findObjectByInteraction(interaction: string) {
+    return this.ctx.interactiveObjects.find(o => o.object3D.userData?.interaction === interaction) || null;
+  }
+
+  /**
+   * Jarak (meter) dari posisi player ke titik terdekat pada XZ di Box3 target.
+   * Memakai clamp ke kotak supaya perabot panjang tidak dianggap "jauh" hanya
+   * karena pemain berdiri di ujungnya.
+   */
+  private calculateDistance(playerState: PlayerState, box: THREE.Box3): number {
+    const cx = THREE.MathUtils.clamp(playerState.position.x, box.min.x, box.max.x);
+    const cz = THREE.MathUtils.clamp(playerState.position.z, box.min.z, box.max.z);
+    const dx = playerState.position.x - cx;
+    const dz = playerState.position.z - cz;
+    return Math.sqrt(dx * dx + dz * dz) / this.ctx.sceneScale;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Penyimpanan skor per aktivitas
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Mengunci skor satu aktivitas. Idempotent: panggilan berikutnya diabaikan,
+   * sehingga skor yang sudah selesai tidak pernah ikut berubah.
+   */
+  private lockActivity(key: ActivityKey, penalty = 0): void {
+    if (this.activityScores[key] !== null) return;
+
+    const base = scoreActivityDistance(this.activityDistance[key], this.rangeFor(key));
+    this.activityScores[key] = clampScore(base - penalty);
+    this.refreshFinalScore();
+  }
+
+  /** Rata-rata kelima skor; tetap null sampai semuanya terisi. */
+  private refreshFinalScore(): void {
+    const values = ACTIVITY_ORDER.map(key => this.activityScores[key]);
+    if (values.some(v => v === null)) {
+      this.finalScore = null;
+      return;
+    }
+    const total = values.reduce<number>((sum, v) => sum + (v as number), 0);
+    this.finalScore = Math.round(total / ACTIVITY_ORDER.length);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Progres tiap step (mekanik interaksi yang ada tidak diubah)
+  // ---------------------------------------------------------------------------
+
+  private updateStepProgress(): void {
+    switch (this.currentStep) {
+      case 'FRIDGE':
+        this.updateFridgeStep();
         break;
       case 'TAKE_CARROT':
-        this.updateTakeCarrotStep(playerState, input, stepState);
+        this.updateTakeCarrotStep();
         break;
       case 'CLEAN_CARROT':
-        this.updateCleanCarrotStep(playerState, input, stepState);
+        this.updateCleanCarrotStep();
         break;
       case 'WINDOW':
-        this.updateWindowStep(playerState, input, stepState);
+        this.updateWindowStep();
         break;
       case 'STOVE':
-        this.updateStoveStep(playerState, input, stepState);
+        this.updateStoveStep();
         break;
       case 'SERVE':
-        this.updateServeStep(playerState, input, stepState);
+        this.updateServeStep();
+        break;
+      default:
         break;
     }
   }
 
-  private updateFridgeStep(playerState: PlayerState, input: ControlInput, stepState: StepState): void {
+  private updateFridgeStep(): void {
     if (!this.fridgeInteraction) return;
 
     const doorState = this.fridgeInteraction.getDoorState();
@@ -266,18 +498,22 @@ export class ErgonomicAssessmentSystem {
 
     if (isDoorClosed && this.fridgeDoorOpened && !this.fridgeDoorClosed) {
       this.fridgeDoorClosed = true;
-      this.completeFridgeAssessment();
+      // Skor kulkas disimpan saat aktivitas kulkas selesai (pintu tertutup).
+      this.lockActivity('KULKAS', this.fridgeCollisionHit ? this.config.fridgeDoorCollisionPenalty : 0);
+      this.completeStep('FRIDGE');
+      this.completeStep('TAKE_CARROT');
     }
   }
 
-  private updateTakeCarrotStep(playerState: PlayerState, input: ControlInput, stepState: StepState): void {
+  private updateTakeCarrotStep(): void {
+    // Step ini tidak punya pengukuran sendiri: memakai aktivitas KULKAS.
     this.lastActivity = 'Mengambil wortel';
     this.lastObjectStatus = 'Kulkas terbuka';
     this.lastActivityStatus = 'Selesai';
     this.completeStep('TAKE_CARROT');
   }
 
-  private updateCleanCarrotStep(playerState: PlayerState, input: ControlInput, stepState: StepState): void {
+  private updateCleanCarrotStep(): void {
     if (!this.carrotCleaner) return;
 
     this.lastActivity = 'Mencuci wortel';
@@ -289,7 +525,9 @@ export class ErgonomicAssessmentSystem {
     }
 
     if (this.carrotCleanCompleted && !this.faucetOn) {
-      this.completeCarrotCleaningAssessment();
+      // Skor cuci disimpan saat mencuci wortel selesai.
+      this.lockActivity('CUCI');
+      this.completeStep('CLEAN_CARROT');
     }
   }
 
@@ -297,11 +535,10 @@ export class ErgonomicAssessmentSystem {
     this.faucetOn = on;
   }
 
-  private updateWindowStep(playerState: PlayerState, input: ControlInput, stepState: StepState): void {
+  private updateWindowStep(): void {
     if (!this.windowSystem) return;
 
-    const windowName = 'jendela_g1';
-    const isOpen = this.windowSystem.isWindowOpen(windowName);
+    const isOpen = this.windowSystem.isWindowOpen(WINDOW_TARGET_KEY);
 
     this.lastActivity = 'Membuka jendela';
     this.lastObjectStatus = isOpen ? 'Terbuka' : 'Tertutup';
@@ -309,11 +546,13 @@ export class ErgonomicAssessmentSystem {
 
     if (isOpen && !this.windowOpened) {
       this.windowOpened = true;
-      this.completeWindowAssessment();
+      // Skor jendela disimpan saat jendela benar-benar terbuka.
+      this.lockActivity('JENDELA');
+      this.completeStep('WINDOW');
     }
   }
 
-  private updateStoveStep(playerState: PlayerState, input: ControlInput, stepState: StepState): void {
+  private updateStoveStep(): void {
     if (!this.stoveFireMinigame) return;
 
     const isMinigameOpen = this.stoveFireMinigame.isOpened();
@@ -323,49 +562,57 @@ export class ErgonomicAssessmentSystem {
     this.lastActivityStatus = this.stoveMinigameCompleted ? 'Selesai' : 'Berlangsung';
 
     if (this.stoveMinigameCompleted) {
-      this.completeStoveAssessment();
+      // Minigame memasak tidak diubah; cukup dikunci di sini.
+      this.lockActivity('MASAK');
+      this.completeStep('STOVE');
     }
   }
 
-  private updateServeStep(playerState: PlayerState, input: ControlInput, stepState: StepState): void {
+  private updateServeStep(): void {
     const isReady = this.servingSystem?.isReadyToServe() ?? false;
 
     this.lastActivity = 'Menghidangkan wortel rebus';
     this.lastObjectStatus = this.foodServed
       ? 'Terhidang di meja saji'
       : isReady
-        ? 'Siap dihidahkan'
+        ? 'Siap dihidangkan'
         : 'Belum matang';
     this.lastActivityStatus = this.foodServed ? 'Selesai' : 'Berlangsung';
 
     if (this.foodServed) {
-      this.completeServeAssessment();
+      this.lockActivity('SAJIKAN');
+      this.completeStep('SERVE');
     }
   }
 
   public completeFridgeAssessment(): void {
     if (this.currentStep !== 'FRIDGE') return;
+    this.lockActivity('KULKAS', this.fridgeCollisionHit ? this.config.fridgeDoorCollisionPenalty : 0);
     this.completeStep('FRIDGE');
     this.completeStep('TAKE_CARROT');
   }
 
   public completeCarrotCleaningAssessment(): void {
     if (this.currentStep !== 'CLEAN_CARROT') return;
+    this.lockActivity('CUCI');
     this.completeStep('CLEAN_CARROT');
   }
 
   public completeWindowAssessment(): void {
     if (this.currentStep !== 'WINDOW') return;
+    this.lockActivity('JENDELA');
     this.completeStep('WINDOW');
   }
 
   public completeStoveAssessment(): void {
     if (this.currentStep !== 'STOVE') return;
+    this.lockActivity('MASAK');
     this.completeStep('STOVE');
   }
 
   public completeServeAssessment(): void {
     if (this.currentStep !== 'SERVE') return;
+    this.lockActivity('SAJIKAN');
     this.completeStep('SERVE');
   }
 
@@ -375,31 +622,39 @@ export class ErgonomicAssessmentSystem {
 
   public onStoveMinigameComplete(): void {
     this.stoveMinigameCompleted = true;
+    // Dikunci langsung di callback supaya skor memakai jarak saat minigame
+    // selesai, bukan frame berikutnya.
+    this.lockActivity('MASAK');
   }
 
-  /** Dipanggil ServingSystem saat wortel rebus diletakkan di meja saji. */
+  /** Dipanggil ServingSystem tepat saat wortel rebus diletakkan di meja saji. */
   public onFoodServed(): void {
     this.foodServed = true;
+    // Skor disajikan diukur dari jarak pada frame klik ini juga: update()
+    // ErgonomicAssessmentSystem jalan lebih dulu dalam satu frame, jadi
+    // liveDistance sudah sesuai posisi player saat klik.
+    this.lockActivity('SAJIKAN');
   }
 
   public onFridgeDoorCollision(): void {
-    this.applyPenalty('fridgeDoorCollision');
+    this.fridgeCollisionHit = true;
   }
 
   private completeStep(step: ErgonomicStep): void {
-    const stepState = this.stepStates.get(step)!;
-    if (stepState.completed) return;
-    stepState.completed = true;
+    if (this.completedSteps.has(step)) return;
+    this.completedSteps.add(step);
 
     const currentIndex = this.stepOrder.indexOf(step);
+    if (currentIndex === -1) return;
+
     if (currentIndex + 1 < this.stepOrder.length) {
       this.currentStep = this.stepOrder[currentIndex + 1];
     } else {
       this.currentStep = 'FINISHED';
       this.finished = true;
+      this.activeActivity = null;
     }
 
-    this.penaltyFlags.clear();
     this.resetStepFlags();
   }
 
@@ -411,23 +666,6 @@ export class ErgonomicAssessmentSystem {
     this.stoveMinigameCompleted = false;
     this.foodServed = false;
     this.faucetOn = false;
-  }
-
-  private findObjectByName(name: string): InteractiveObject | null {
-    return this.ctx.interactiveObjects.find(o => o.name === name) || null;
-  }
-
-  private findObjectByInteraction(interaction: string): InteractiveObject | null {
-    return this.ctx.interactiveObjects.find(o => o.object3D.userData?.interaction === interaction) || null;
-  }
-
-  private calculateDistance(playerState: PlayerState, obj: InteractiveObject): number {
-    const b = obj.boundingBox;
-    const cx = THREE.MathUtils.clamp(playerState.position.x, b.min.x, b.max.x);
-    const cz = THREE.MathUtils.clamp(playerState.position.z, b.min.z, b.max.z);
-    const dx = playerState.position.x - cx;
-    const dz = playerState.position.z - cz;
-    return Math.sqrt(dx * dx + dz * dz) / this.ctx.sceneScale;
   }
 
   public canInteract(objectType: 'fridge' | 'faucet' | 'window' | 'stove' | 'serving_table'): boolean {
@@ -445,44 +683,54 @@ export class ErgonomicAssessmentSystem {
   }
 
   public getResult(): ErgonomicAssessmentResult {
+    const activities: ActivityScoreRow[] = ACTIVITY_ORDER.map(key => {
+      const locked = this.activityScores[key];
+      const isLive = this.activeActivity === key && locked === null && !this.finished;
+      return {
+        key,
+        label: ACTIVITY_SPECS[key].label,
+        state: locked !== null ? 'done' : isLive ? 'live' : 'pending',
+        score: locked !== null ? locked : isLive ? this.liveScore : null,
+        distance: this.activityDistance[key],
+        ideal: this.rangeFor(key).ideal,
+      };
+    });
+
     return {
       currentStep: this.currentStep,
-      score: Math.max(0, this.score),
-      stepProgress: this.stepOrder.map(step => ({
-        step,
-        completed: this.stepStates.get(step)?.completed ?? false,
-        perfect: this.stepStates.get(step)?.perfect ?? true,
-      })),
-      distance: this.lastDistance,
+      currentActivity: this.activeActivity,
+      activities,
+      distance: this.liveDistance,
       distanceStatus: this.lastDistanceStatus,
       activity: this.lastActivity,
       objectStatus: this.lastObjectStatus,
       activityStatus: this.lastActivityStatus,
-      perfectRun: this.perfectRun,
+      completedCount: ACTIVITY_ORDER.filter(key => this.activityScores[key] !== null).length,
+      totalCount: ACTIVITY_ORDER.length,
+      finalScore: this.finalScore,
       finished: this.finished,
     };
   }
 
   public reset(): void {
     this.currentStep = 'FRIDGE';
-    this.score = 100;
-    this.perfectRun = true;
     this.finished = false;
-    this.penaltyFlags.clear();
-    this.lastDistance = 0;
+    this.finalScore = null;
+    this.activeActivity = 'KULKAS';
+    this.liveDistance = 0;
+    this.liveScore = 0;
     this.lastDistanceStatus = 'ergonomic';
     this.lastActivity = '';
     this.lastObjectStatus = '';
     this.lastActivityStatus = 'Berlangsung';
+    this.fridgeCollisionHit = false;
+    this.completedSteps.clear();
     this.resetStepFlags();
 
-    this.stepOrder.forEach(step => {
-      this.stepStates.set(step, {
-        completed: false,
-        perfect: true,
-        penaltyApplied: { tooClose: false, tooFar: false, fridgeDoorCollision: false },
-      });
-    });
+    for (const key of ACTIVITY_ORDER) {
+      this.activityScores[key] = null;
+      this.activityDistance[key] = 0;
+    }
   }
 
   private updatePanel(): void {
@@ -491,61 +739,207 @@ export class ErgonomicAssessmentSystem {
   }
 }
 
+// -----------------------------------------------------------------------------
+// Panel
+// -----------------------------------------------------------------------------
+
+export function scoreColor(score: number): string {
+  if (score >= 80) return '#4caf50';
+  if (score >= 50) return '#ff9800';
+  return '#f44336';
+}
+
 export function createErgonomicAssessmentPanel(): HTMLElement {
   const panel = document.createElement('div');
-  panel.id = 'ergonomic-assessment-panel';
+  panel.id = 'ergonomic-assessment-inner';
   panel.style.cssText = `
     position: fixed;
     right: 16px;
     top: 80px;
-    width: 280px;
+    width: 300px;
     background: rgba(15, 20, 40, 0.95);
     backdrop-filter: blur(12px);
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 16px;
-    padding: 20px;
+    padding: 16px;
     z-index: 50;
     font-family: 'Segoe UI', system-ui, sans-serif;
     color: #e0e0e0;
     pointer-events: none;
+    max-height: calc(100vh - 120px);
+    overflow-y: auto;
   `;
+
+  const rows = ACTIVITY_ORDER.map((key, index) => {
+    const spec = ACTIVITY_SPECS[key];
+    const range = spec.range;
+    return `
+      <div class="ergo-row" data-activity="${key}" data-state="pending">
+        <div class="ergo-row-top">
+          <span class="ergo-row-name">${index + 1}. ${spec.label}</span>
+          <span class="ergo-row-score">—</span>
+        </div>
+        <div class="ergo-row-bottom">
+          <span class="ergo-row-state">Belum dikerjakan</span>
+          <span class="ergo-row-distance">ideal ${range.ideal.toFixed(2)} m</span>
+        </div>
+        <div class="ergo-row-bar"><div class="ergo-row-fill" style="width:0%;"></div></div>
+      </div>
+    `;
+  }).join('');
 
   panel.innerHTML = `
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.1);">
-      <h3 style="font-size: 0.85rem; font-weight: 700; letter-spacing: 0.06em; color: #e94560; text-transform: uppercase; margin: 0;">PENILAIAN ERGONOMI</h3>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.1);">
+      <h3 style="font-size:0.8rem;font-weight:700;letter-spacing:0.06em;color:#e94560;text-transform:uppercase;margin:0;">Penilaian Ergonomi</h3>
+      <span style="font-size:0.65rem;opacity:0.5;">jarak live per aktivitas</span>
     </div>
 
-    <div style="margin-bottom: 16px;">
-      <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Skor</div>
-      <div id="ergo-score" style="font-size: 2rem; font-weight: 700; color: #4caf50;">100 / 100</div>
+    <div class="ergo-live" data-state="idle">
+      <div class="ergo-live-head">
+        <span class="ergo-live-name">Menunggu aktivitas</span>
+        <span class="ergo-live-badge">LIVE</span>
+      </div>
+      <div class="ergo-live-metrics">
+        <div class="ergo-metric">
+          <span class="ergo-metric-label">Jarak</span>
+          <span class="ergo-metric-value" data-field="distance">0.00 m</span>
+        </div>
+        <div class="ergo-metric">
+          <span class="ergo-metric-label">Skor</span>
+          <span class="ergo-metric-value" data-field="live-score">—</span>
+        </div>
+      </div>
+      <div class="ergo-live-status" data-field="status">·</div>
+      <div class="ergo-live-object" data-field="object">—</div>
     </div>
 
-    <div style="margin-bottom: 16px;">
-      <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Tahap</div>
-      <div id="ergo-step" style="font-size: 1rem; font-weight: 600; color: #e94560;">Mengambil bahan</div>
+    <div class="ergo-list">${rows}</div>
+
+    <div class="ergo-final" data-field="final" style="display:none;">
+      <div class="ergo-final-label">Final Score</div>
+      <div class="ergo-final-value" data-field="final-score">0</div>
+      <div class="ergo-final-note" data-field="final-note"></div>
+      <div class="ergo-final-breakdown" data-field="final-breakdown"></div>
     </div>
 
-    <div style="margin-bottom: 16px;">
-      <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Aktivitas</div>
-      <div id="ergo-activity" style="font-size: 0.85rem; font-weight: 500; color: #aaa;">Kulkas</div>
-    </div>
-
-    <div style="margin-bottom: 16px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
-      <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Jarak</div>
-      <div id="ergo-distance" style="font-size: 1.5rem; font-weight: 700; color: #4caf50;">0.00 m</div>
-      <div id="ergo-distance-status" style="font-size: 0.75rem; margin-top: 4px; font-weight: 600;">✓ Ergonomis</div>
-    </div>
-
-    <div style="margin-bottom: 16px;">
-      <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Status Aktivitas</div>
-      <div id="ergo-activity-status" style="font-size: 0.85rem; font-weight: 600; color: #ff9800;">Berlangsung</div>
-    </div>
-
-    <div style="margin-bottom: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05);">
-      <div style="font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase;">Progress</div>
-      <div id="ergo-progress" style="font-size: 0.85rem; font-weight: 600; color: #e94560;">1 / 6</div>
-    </div>
+    <div class="ergo-progress">Aktivitas selesai: <span data-field="progress">0 / 5</span></div>
   `;
+
+  // Gaya dasar ditulis lewat <style> sekali saja supaya innerHTML tetap ringkas.
+  const style = document.createElement('style');
+  style.textContent = `
+    #ergonomic-assessment-inner .ergo-live {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+    }
+    #ergonomic-assessment-inner .ergo-live[data-state="live"] {
+      border-color: rgba(76,175,80,0.5);
+      box-shadow: 0 0 0 1px rgba(76,175,80,0.15) inset;
+    }
+    #ergonomic-assessment-inner .ergo-live-head {
+      display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    }
+    #ergonomic-assessment-inner .ergo-live-name {
+      font-size: 0.8rem; font-weight: 600; color: #e0e0e0;
+    }
+    #ergonomic-assessment-inner .ergo-live-badge {
+      font-size: 0.55rem; font-weight: 700; letter-spacing: 0.08em;
+      color: #4caf50; border: 1px solid rgba(76,175,80,0.4);
+      border-radius: 4px; padding: 1px 5px; display: none;
+    }
+    #ergonomic-assessment-inner .ergo-live[data-state="live"] .ergo-live-badge { display: block; }
+    #ergonomic-assessment-inner .ergo-live-metrics {
+      display: flex; gap: 12px; margin-top: 8px;
+    }
+    #ergonomic-assessment-inner .ergo-metric { flex: 1; }
+    #ergonomic-assessment-inner .ergo-metric-label {
+      display: block; font-size: 0.6rem; text-transform: uppercase; opacity: 0.5;
+    }
+    #ergonomic-assessment-inner .ergo-metric-value {
+      display: block; font-size: 1.15rem; font-weight: 700; margin-top: 2px;
+    }
+    #ergonomic-assessment-inner .ergo-live-status {
+      margin-top: 8px; font-size: 0.72rem; font-weight: 600;
+    }
+    #ergonomic-assessment-inner .ergo-live-object {
+      margin-top: 2px; font-size: 0.7rem; opacity: 0.55;
+    }
+
+    #ergonomic-assessment-inner .ergo-list { display: flex; flex-direction: column; gap: 6px; }
+    #ergonomic-assessment-inner .ergo-row {
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px; padding: 8px 10px;
+      background: rgba(255,255,255,0.02);
+    }
+    #ergonomic-assessment-inner .ergo-row[data-state="live"] {
+      border-color: rgba(76,175,80,0.45);
+      background: rgba(76,175,80,0.06);
+    }
+    #ergonomic-assessment-inner .ergo-row[data-state="done"] {
+      border-color: rgba(76,175,80,0.25);
+    }
+    #ergonomic-assessment-inner .ergo-row[data-state="pending"] { opacity: 0.45; }
+    #ergonomic-assessment-inner .ergo-row-top {
+      display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+    }
+    #ergonomic-assessment-inner .ergo-row-name {
+      font-size: 0.74rem; font-weight: 600;
+    }
+    #ergonomic-assessment-inner .ergo-row-score {
+      font-size: 0.95rem; font-weight: 700; font-variant-numeric: tabular-nums;
+    }
+    #ergonomic-assessment-inner .ergo-row-bottom {
+      display: flex; justify-content: space-between; align-items: baseline;
+      gap: 8px; margin-top: 3px;
+    }
+    #ergonomic-assessment-inner .ergo-row-state {
+      font-size: 0.62rem; opacity: 0.7;
+    }
+    #ergonomic-assessment-inner .ergo-row-distance {
+      font-size: 0.62rem; opacity: 0.6; font-variant-numeric: tabular-nums;
+    }
+    #ergonomic-assessment-inner .ergo-row-bar {
+      height: 3px; border-radius: 2px; background: rgba(255,255,255,0.08);
+      margin-top: 6px; overflow: hidden;
+    }
+    #ergonomic-assessment-inner .ergo-row-fill {
+      height: 100%; border-radius: 2px; transition: width 0.08s linear;
+    }
+
+    #ergonomic-assessment-inner .ergo-final {
+      margin-top: 14px; padding: 12px;
+      border: 1px solid rgba(233,69,96,0.35);
+      border-radius: 10px;
+      background: rgba(233,69,96,0.08);
+      text-align: center;
+    }
+    #ergonomic-assessment-inner .ergo-final-label {
+      font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.7;
+    }
+    #ergonomic-assessment-inner .ergo-final-value {
+      font-size: 2.4rem; font-weight: 700; line-height: 1.1; margin: 2px 0 4px;
+    }
+    #ergonomic-assessment-inner .ergo-final-note {
+      font-size: 0.65rem; opacity: 0.6; margin-bottom: 8px;
+    }
+    #ergonomic-assessment-inner .ergo-final-breakdown {
+      display: flex; flex-direction: column; gap: 3px;
+      font-size: 0.65rem; opacity: 0.8;
+      font-variant-numeric: tabular-nums;
+    }
+    #ergonomic-assessment-inner .ergo-final-breakdown span {
+      display: flex; justify-content: space-between;
+    }
+    #ergonomic-assessment-inner .ergo-progress {
+      margin-top: 12px; padding-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.05);
+      font-size: 0.68rem; opacity: 0.6;
+    }
+  `;
+  document.head.appendChild(style);
 
   return panel;
 }

@@ -16,7 +16,7 @@ import { DoorTeleportSystem } from './modules/DoorTeleportSystem';
 import { ProximityTeleportSystem } from './modules/ProximityTeleportSystem';
 import { CarrotCleaner } from './modules/CarrotCleaner';
 import { StoveFireMinigame } from './modules/StoveFireMinigame';
-import { ErgonomicAssessmentSystem, createErgonomicAssessmentPanel, ErgonomicAssessmentResult } from './modules/ErgonomicAssessmentSystem';
+import { ErgonomicAssessmentSystem, createErgonomicAssessmentPanel, ErgonomicAssessmentResult, WINDOW_TARGET_KEY, scoreColor } from './modules/ErgonomicAssessmentSystem';
 import { ServingSystem } from './modules/ServingSystem';
 
 const GLB_BASE = (() => {
@@ -89,6 +89,8 @@ class KitchenErgonomicsApp {
   private ergonomicAssessment!: ErgonomicAssessmentSystem;
   private servingSystem!: ServingSystem;
   private servingSetNode: THREE.Object3D | null = null;
+  /** Root jendela yang dipakai sebagai titik ukur jarak tahap MEMBUKA JENDELA. */
+  private windowNode: THREE.Object3D | null = null;
   private carrotCleanSucceeded = false;
   private faucetCarrotTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -114,6 +116,15 @@ class KitchenErgonomicsApp {
   private promptText: HTMLElement;
   private interactionPanel: HTMLElement;
   private interactionPanelOptions: HTMLElement;
+  // Elemen 5 baris aktivitas di panel ergonomi, di-cache sekali lalu hanya
+  // nilai/textContent-nya yang diubah setiap frame.
+  private ergoActivityRows: Map<string, {
+    root: HTMLElement;
+    score: HTMLElement;
+    state: HTMLElement;
+    distance: HTMLElement;
+    fill: HTMLElement;
+  }> = new Map();
   private playerPosEl: HTMLElement;
   private mobileControlsEl: HTMLElement;
   private portraitOverlay: HTMLElement;
@@ -404,6 +415,14 @@ kitchenModel: null,
         this.interaction.getWindowSystem()
       );
       this.ergonomicAssessment.setServingSystem(this.servingSystem);
+
+      // Jendela dimuat sebelum assessment system dibuat, jadi titik ukur
+      // jaraknya didaftarkan manual di sini (jendela tidak ada di
+      // ctx.interactiveObjects).
+      if (this.windowNode) {
+        this.ergonomicAssessment.registerMeasurementTarget(WINDOW_TARGET_KEY, this.windowNode);
+      }
+
       const assessmentPanel = createErgonomicAssessmentPanel();
       document.getElementById('ergonomic-assessment-panel')!.appendChild(assessmentPanel);
       this.ergonomicAssessment.setPanel(document.getElementById('ergonomic-assessment-panel')!);
@@ -848,6 +867,10 @@ kitchenModel: null,
     } else {
       this.ctx.scene.add(windowModel);
     }
+
+    // Jendela tidak terdaftar di ctx.interactiveObjects, jadi sistem penilaian
+    // ergonomi butuh reference ini untuk mengukur jarak ke titik interaksinya.
+    this.windowNode = windowModel;
   }
 
   private setupReachIndicator(): void {
@@ -1287,57 +1310,129 @@ kitchenModel: null,
     }
   }
 
+  /**
+   * Panel penilaian ergonomi: satu baris per aktivitas. Skor live hanya untuk
+   * aktivitas yang sedang dikerjakan; baris yang sudah selesai terkunci dan
+   * tidak ikut berubah. Final score baru tampil setelah kelima aktivitas selesai.
+   */
   private updateErgonomicAssessmentPanel(result: ErgonomicAssessmentResult): void {
-    const panel = document.getElementById('ergonomic-assessment-panel') as HTMLElement;
+    const panel = document.getElementById('ergonomic-assessment-panel') as HTMLElement | null;
     if (!panel) return;
 
-    const scoreEl = panel.querySelector('#ergo-score') as HTMLElement;
-    if (scoreEl) {
-      scoreEl.textContent = `${result.score} / 100`;
-      if (result.score >= 80) scoreEl.style.color = '#4caf50';
-      else if (result.score >= 50) scoreEl.style.color = '#ff9800';
-      else scoreEl.style.color = '#f44336';
+    const q = <T extends HTMLElement>(selector: string): T | null => panel.querySelector<T>(selector);
+
+    // Cache elemen baris sekali saja; setelah itu cukup ubah nilainya.
+    if (this.ergoActivityRows.size === 0) {
+      panel.querySelectorAll<HTMLElement>('.ergo-row').forEach((row) => {
+        const key = row.dataset.activity;
+        if (!key) return;
+        this.ergoActivityRows.set(key, {
+          root: row,
+          score: row.querySelector<HTMLElement>('.ergo-row-score')!,
+          state: row.querySelector<HTMLElement>('.ergo-row-state')!,
+          distance: row.querySelector<HTMLElement>('.ergo-row-distance')!,
+          fill: row.querySelector<HTMLElement>('.ergo-row-fill')!,
+        });
+      });
     }
 
-    const stepEl = panel.querySelector('#ergo-step');
-    const stepNames: Record<string, string> = {
-      FRIDGE: 'Mengambil bahan',
-      TAKE_CARROT: 'Mengambil wortel',
-      CLEAN_CARROT: 'Mencuci wortel',
-      WINDOW: 'Ventilasi',
-      STOVE: 'Memasak',
-      SERVE: 'Menghidahkan',
-      FINISHED: 'Selesai',
-    };
-    if (stepEl) stepEl.textContent = stepNames[result.currentStep] || result.currentStep;
+    const liveRow = result.activities.find(a => a.state === 'live') ?? null;
+    const liveScore = liveRow?.score ?? null;
 
-    const activityEl = panel.querySelector('#ergo-activity');
-    if (activityEl) activityEl.textContent = result.activity;
+    const liveBlock = q('.ergo-live');
+    if (liveBlock) liveBlock.dataset.state = liveRow ? 'live' : 'idle';
 
-    const distanceEl = panel.querySelector('#ergo-distance');
-    if (distanceEl) distanceEl.textContent = `${result.distance.toFixed(2)} m`;
+    const liveName = q('.ergo-live-name');
+    if (liveName) {
+      liveName.textContent = liveRow
+        ? liveRow.label
+        : result.finished
+          ? 'Semua aktivitas selesai'
+          : result.activity || 'Menunggu aktivitas';
+    }
 
-    const distanceStatusEl = panel.querySelector('#ergo-distance-status') as HTMLElement;
-    if (distanceStatusEl) {
+    const liveDistance = q('[data-field="distance"]');
+    if (liveDistance) liveDistance.textContent = `${result.distance.toFixed(2)} m`;
+
+    const liveScoreEl = q('[data-field="live-score"]');
+    if (liveScoreEl) {
+      liveScoreEl.textContent = liveScore !== null ? String(liveScore) : '—';
+      liveScoreEl.style.color = liveScore !== null ? scoreColor(liveScore) : '#888';
+    }
+
+    const liveStatus = q('[data-field="status"]');
+    if (liveStatus) {
       const statusMap: Record<string, { text: string; color: string }> = {
-        tooClose: { text: '✕ Terlalu Dekat', color: '#f44336' },
-        ergonomic: { text: '✓ Ergonomis', color: '#4caf50' },
-        tooFar: { text: '✕ Terlalu Jauh', color: '#ff9800' },
+        tooClose: { text: 'Terlalu Dekat', color: '#f44336' },
+        ergonomic: { text: 'Ergonomis', color: '#4caf50' },
+        tooFar: { text: 'Terlalu Jauh', color: '#ff9800' },
       };
-      const status = statusMap[result.distanceStatus] || { text: '', color: '#4caf50' };
-      distanceStatusEl.textContent = status.text;
-      distanceStatusEl.style.color = status.color;
+      const status = statusMap[result.distanceStatus];
+      liveStatus.textContent = liveRow && status ? status.text : '-';
+      liveStatus.style.color = liveRow && status ? status.color : '#888';
     }
 
-    const activityStatusEl = panel.querySelector('#ergo-activity-status') as HTMLElement;
-    if (activityStatusEl) {
-      activityStatusEl.textContent = result.activityStatus;
-      activityStatusEl.style.color = result.activityStatus === 'Selesai' ? '#4caf50' : '#ff9800';
+    const liveObject = q('[data-field="object"]');
+    if (liveObject) {
+      liveObject.textContent = liveRow
+        ? `${result.activity} - ${result.objectStatus}`
+        : result.objectStatus || '-';
     }
 
-    const progressEl = panel.querySelector('#ergo-progress');
-    const completedCount = result.stepProgress.filter(s => s.completed).length;
-    if (progressEl) progressEl.textContent = `${completedCount} / 6`;
+    // Setiap baris independen: hanya baris live yang boleh berubah nilainya.
+    for (const activity of result.activities) {
+      const row = this.ergoActivityRows.get(activity.key);
+      if (!row) continue;
+
+      row.root.dataset.state = activity.state;
+
+      if (activity.state === 'pending') {
+        row.score.textContent = '--';
+        row.score.style.color = '#888';
+        row.state.textContent = 'Belum dikerjakan';
+        row.distance.textContent = `ideal ${activity.ideal.toFixed(2)} m`;
+        row.fill.style.width = '0%';
+        row.fill.style.background = 'transparent';
+        continue;
+      }
+
+      const score = activity.score ?? 0;
+      const color = scoreColor(score);
+      row.score.textContent = String(score);
+      row.score.style.color = color;
+      row.fill.style.width = `${score}%`;
+      row.fill.style.background = color;
+      row.distance.textContent = `${activity.distance.toFixed(2)} m (ideal ${activity.ideal.toFixed(2)} m)`;
+      row.state.textContent = activity.state === 'live' ? 'LIVE - sedang diukur' : 'Selesai - terkunci';
+    }
+
+    // Final score hanya muncul setelah kelima aktivitas selesai.
+    const finalBlock = q('[data-field="final"]');
+    if (finalBlock) finalBlock.style.display = result.finalScore !== null ? 'block' : 'none';
+
+    if (result.finalScore !== null) {
+      const finalScoreEl = q('[data-field="final-score"]');
+      if (finalScoreEl) {
+        finalScoreEl.textContent = String(result.finalScore);
+        finalScoreEl.style.color = scoreColor(result.finalScore);
+      }
+
+      const note = q('[data-field="final-note"]');
+      if (note) {
+        const sum = result.activities.map(a => a.score ?? 0).join(' + ');
+        note.textContent = `Rata-rata dari ${result.totalCount} aktivitas: (${sum}) / ${result.totalCount}`;
+      }
+
+      const breakdown = q('[data-field="final-breakdown"]');
+      if (breakdown) {
+        breakdown.innerHTML = result.activities
+          .map(a => `<span><span>${a.label}</span><span>${a.score ?? 0}</span></span>`)
+          .join('');
+      }
+    }
+
+    const progress = q('[data-field="progress"]');
+    if (progress) progress.textContent = `${result.completedCount} / ${result.totalCount}`;
   }
 
   private onResize(): void {
