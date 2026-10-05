@@ -17,6 +17,7 @@ import { ProximityTeleportSystem } from './modules/ProximityTeleportSystem';
 import { CarrotCleaner } from './modules/CarrotCleaner';
 import { StoveFireMinigame } from './modules/StoveFireMinigame';
 import { ErgonomicAssessmentSystem, createErgonomicAssessmentPanel, ErgonomicAssessmentResult, WINDOW_TARGET_KEY, scoreColor } from './modules/ErgonomicAssessmentSystem';
+import { ErgonomicResultModal } from './modules/ErgonomicResultModal';
 import { ServingSystem } from './modules/ServingSystem';
 
 const GLB_BASE = (() => {
@@ -87,6 +88,10 @@ class KitchenErgonomicsApp {
   private carrotCleaner!: CarrotCleaner;
   private stoveFireMinigame!: StoveFireMinigame;
   private ergonomicAssessment!: ErgonomicAssessmentSystem;
+  /** Popup hasil penilaian; hanya dibuka lewat tombol PREVIEW HASIL. */
+  private ergonomicResultModal!: ErgonomicResultModal;
+  /** Hasil penilaian terakhir, dipakai saat tombol PREVIEW HASIL diklik. */
+  private lastAssessmentResult: ErgonomicAssessmentResult | null = null;
   private servingSystem!: ServingSystem;
   private servingSetNode: THREE.Object3D | null = null;
   /** Root jendela yang dipakai sebagai titik ukur jarak tahap MEMBUKA JENDELA. */
@@ -427,8 +432,28 @@ kitchenModel: null,
       document.getElementById('ergonomic-assessment-panel')!.appendChild(assessmentPanel);
       this.ergonomicAssessment.setPanel(document.getElementById('ergonomic-assessment-panel')!);
       this.ergonomicAssessment.setOnResultChange((result: ErgonomicAssessmentResult) => {
+        this.lastAssessmentResult = result;
         this.updateErgonomicAssessmentPanel(result);
       });
+
+      // Popup hasil penilaian. Tampilannya ditentukan sekali lewat options;
+      // isinya diambil dari state penilaian saat tombol ditekan.
+      this.ergonomicResultModal = new ErgonomicResultModal({
+        onContinue: () => {
+          // Kembali ke gameplay. Progres dan skor yang sudah terkunci tetap
+          // tersimpan di ErgonomicAssessmentSystem — tidak ada reset.
+          if (this.currentMode === 'desktop' && this.desktopControls) {
+            this.desktopControls.requestPointerLock();
+          }
+        },
+        onExit: () => {
+          // Pakai mekanisme keluar yang sudah ada (pintu teleport), tanpa
+          // membuat navigasi/exit baru.
+          this.doorTeleport?.exitSimulation();
+        },
+      });
+
+      this.setupAssessmentPreviewButton();
 
       // Inject dependencies into InteractionSystem after fridge/stove are loaded
       this.interaction.setFridgeInteraction(this.fridgeInteraction);
@@ -964,6 +989,11 @@ kitchenModel: null,
 
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Escape') {
+        // Popup hasil punya prioritas: menutupnya kembali ke gameplay.
+        if (this.ergonomicResultModal?.isOpened()) {
+          this.ergonomicResultModal.close();
+          return;
+        }
         if (this.carrotCleaner?.isOpened()) {
           this.carrotCleaner.close();
         } else if (this.stoveFireMinigame?.isOpened()) {
@@ -1014,6 +1044,22 @@ kitchenModel: null,
       if (obj && obj.movable && this.furnitureMove) {
         this.furnitureMove.startMoving(obj);
       }
+    });
+  }
+
+  /**
+   * Tombol PREVIEW HASIL di panel penilaian. Tidak otomatis terbuka: popup
+   * hanya muncul di event klik ini, dan hanya jika kelima skor sudah terkunci.
+   */
+  private setupAssessmentPreviewButton(): void {
+    const panel = document.getElementById('ergonomic-assessment-panel');
+    const btn = panel?.querySelector<HTMLButtonElement>('[data-field="preview"]');
+    if (!btn) return;
+
+    btn.addEventListener('click', () => {
+      const result = this.lastAssessmentResult;
+      if (!result || result.finalScore === null) return;
+      this.ergonomicResultModal?.open(result);
     });
   }
 
@@ -1313,7 +1359,8 @@ kitchenModel: null,
   /**
    * Panel penilaian ergonomi: satu baris per aktivitas. Skor live hanya untuk
    * aktivitas yang sedang dikerjakan; baris yang sudah selesai terkunci dan
-   * tidak ikut berubah. Final score baru tampil setelah kelima aktivitas selesai.
+   * tidak ikut berubah. Skor akhir tidak ada di panel ini — hanya tombol
+   * PREVIEW HASIL yang muncul aktif setelah kelima aktivitas selesai.
    */
   private updateErgonomicAssessmentPanel(result: ErgonomicAssessmentResult): void {
     const panel = document.getElementById('ergonomic-assessment-panel') as HTMLElement | null;
@@ -1406,29 +1453,21 @@ kitchenModel: null,
       row.state.textContent = activity.state === 'live' ? 'LIVE - sedang diukur' : 'Selesai - terkunci';
     }
 
-    // Final score hanya muncul setelah kelima aktivitas selesai.
-    const finalBlock = q('[data-field="final"]');
-    if (finalBlock) finalBlock.style.display = result.finalScore !== null ? 'block' : 'none';
+    // Skor akhir tidak pernah tampil di tabel live. Setelah kelima aktivitas
+    // selesai, tombol PREVIEW HASIL aktif untuk membuka popup hasil.
+    const allScoresLocked = result.completedCount === result.totalCount && result.finalScore !== null;
 
-    if (result.finalScore !== null) {
-      const finalScoreEl = q('[data-field="final-score"]');
-      if (finalScoreEl) {
-        finalScoreEl.textContent = String(result.finalScore);
-        finalScoreEl.style.color = scoreColor(result.finalScore);
-      }
+    const previewBtn = q<HTMLButtonElement>('[data-field="preview"]');
+    if (previewBtn) {
+      previewBtn.disabled = !allScoresLocked;
+      previewBtn.dataset.ready = allScoresLocked ? 'true' : 'false';
+    }
 
-      const note = q('[data-field="final-note"]');
-      if (note) {
-        const sum = result.activities.map(a => a.score ?? 0).join(' + ');
-        note.textContent = `Rata-rata dari ${result.totalCount} aktivitas: (${sum}) / ${result.totalCount}`;
-      }
-
-      const breakdown = q('[data-field="final-breakdown"]');
-      if (breakdown) {
-        breakdown.innerHTML = result.activities
-          .map(a => `<span><span>${a.label}</span><span>${a.score ?? 0}</span></span>`)
-          .join('');
-      }
+    const previewNote = q('[data-field="preview-note"]');
+    if (previewNote) {
+      previewNote.textContent = allScoresLocked
+        ? 'Tekan untuk melihat skor akhir dan rincian penilaian.'
+        : 'Selesaikan kelima aktivitas untuk melihat hasil penilaian.';
     }
 
     const progress = q('[data-field="progress"]');

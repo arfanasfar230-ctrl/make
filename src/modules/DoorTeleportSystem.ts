@@ -233,6 +233,15 @@ export class DoorTeleportSystem {
     return this.isHovered;
   }
 
+  /**
+   * Jalankan mekanisme keluar yang sudah dipakai project (pintu → ErgoPur).
+   * Dipakai juga oleh tombol KELUAR di modal hasil penilaian supaya tidak ada
+   * URL/navigasi baru yang diduplikasi di modul lain.
+   */
+  public exitSimulation(): void {
+    this.onYes();
+  }
+
   public isPopupVisible(): boolean {
     return this.overlay?.style.display === 'flex';
   }

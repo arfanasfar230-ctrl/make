@@ -42,6 +42,8 @@ export interface ActivityRange {
 export interface ActivitySpec {
   key: ActivityKey;
   label: string;
+  /** Nama ringkas untuk tabel rincian di modal hasil (panel live pakai `label`). */
+  shortLabel: string;
   range: ActivityRange;
 }
 
@@ -49,26 +51,31 @@ const ACTIVITY_SPECS: Record<ActivityKey, ActivitySpec> = {
   KULKAS: {
     key: 'KULKAS',
     label: 'Mengambil Bahan dari Kulkas',
+    shortLabel: 'Kulkas',
     range: { min: 0.7, max: 1.0, ideal: 0.85, mepet: 0.5, nearZero: 0.45, farZero: 0.8 },
   },
   CUCI: {
     key: 'CUCI',
     label: 'Mencuci Wortel',
+    shortLabel: 'Mencuci Wortel',
     range: { min: 0.5, max: 0.7, ideal: 0.6, mepet: 0.4, nearZero: 0.45, farZero: 0.8 },
   },
   JENDELA: {
     key: 'JENDELA',
     label: 'Membuka Jendela',
+    shortLabel: 'Membuka Jendela',
     range: { min: 0.6, max: 0.8, ideal: 0.7, mepet: 0.45, nearZero: 0.45, farZero: 0.8 },
   },
   MASAK: {
     key: 'MASAK',
     label: 'Memasak',
+    shortLabel: 'Memasak',
     range: { min: 0.5, max: 0.7, ideal: 0.6, mepet: 0.4, nearZero: 0.45, farZero: 0.8 },
   },
   SAJIKAN: {
     key: 'SAJIKAN',
     label: 'Menyajikan',
+    shortLabel: 'Menyajikan',
     range: { min: 0.5, max: 0.6, ideal: 0.55, mepet: 0.4, nearZero: 0.45, farZero: 0.6 },
   },
 };
@@ -194,6 +201,8 @@ export type ActivityRowState = 'pending' | 'live' | 'done';
 export interface ActivityScoreRow {
   key: ActivityKey;
   label: string;
+  /** Nama ringkas untuk tabel rincian di modal hasil. */
+  shortLabel: string;
   state: ActivityRowState;
   /** Skor final saat `done`, skor live saat `live`, null saat `pending`. */
   score: number | null;
@@ -689,6 +698,7 @@ export class ErgonomicAssessmentSystem {
       return {
         key,
         label: ACTIVITY_SPECS[key].label,
+        shortLabel: ACTIVITY_SPECS[key].shortLabel,
         state: locked !== null ? 'done' : isLive ? 'live' : 'pending',
         score: locked !== null ? locked : isLive ? this.liveScore : null,
         distance: this.activityDistance[key],
@@ -815,11 +825,11 @@ export function createErgonomicAssessmentPanel(): HTMLElement {
 
     <div class="ergo-list">${rows}</div>
 
-    <div class="ergo-final" data-field="final" style="display:none;">
-      <div class="ergo-final-label">Final Score</div>
-      <div class="ergo-final-value" data-field="final-score">0</div>
-      <div class="ergo-final-note" data-field="final-note"></div>
-      <div class="ergo-final-breakdown" data-field="final-breakdown"></div>
+    <div class="ergo-preview">
+      <button type="button" class="ergo-preview-btn" data-field="preview" disabled>
+        PREVIEW HASIL
+      </button>
+      <p class="ergo-preview-note" data-field="preview-note">Selesaikan kelima aktivitas untuk melihat hasil penilaian.</p>
     </div>
 
     <div class="ergo-progress">Aktivitas selesai: <span data-field="progress">0 / 5</span></div>
@@ -909,29 +919,49 @@ export function createErgonomicAssessmentPanel(): HTMLElement {
       height: 100%; border-radius: 2px; transition: width 0.08s linear;
     }
 
-    #ergonomic-assessment-inner .ergo-final {
-      margin-top: 14px; padding: 12px;
-      border: 1px solid rgba(233,69,96,0.35);
+    #ergonomic-assessment-inner .ergo-preview {
+      margin-top: 14px;
+    }
+    #ergonomic-assessment-inner .ergo-preview-btn {
+      /* Panel memakai pointer-events:none supaya tidak menghalangi gameplay,
+         jadi tombol ini harus mengambil kliknya kembali. */
+      pointer-events: auto;
+      width: 100%;
+      padding: 11px 12px;
       border-radius: 10px;
+      border: 1px solid rgba(233,69,96,0.35);
       background: rgba(233,69,96,0.08);
+      color: rgba(224,224,224,0.45);
+      font-family: inherit;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      cursor: not-allowed;
+      transition: background 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s;
+    }
+    #ergonomic-assessment-inner .ergo-preview-btn:disabled {
+      opacity: 0.75;
+    }
+    #ergonomic-assessment-inner .ergo-preview-btn[data-ready="true"] {
+      background: #e94560;
+      border-color: #e94560;
+      color: #fff;
+      cursor: pointer;
+      box-shadow: 0 4px 18px rgba(233,69,96,0.35);
+    }
+    #ergonomic-assessment-inner .ergo-preview-btn[data-ready="true"]:hover {
+      background: #d63851;
+      border-color: #d63851;
+    }
+    #ergonomic-assessment-inner .ergo-preview-btn[data-ready="true"]:active {
+      transform: translateY(1px);
+    }
+    #ergonomic-assessment-inner .ergo-preview-note {
+      margin: 6px 0 0;
+      font-size: 0.62rem;
+      line-height: 1.4;
+      opacity: 0.55;
       text-align: center;
-    }
-    #ergonomic-assessment-inner .ergo-final-label {
-      font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.7;
-    }
-    #ergonomic-assessment-inner .ergo-final-value {
-      font-size: 2.4rem; font-weight: 700; line-height: 1.1; margin: 2px 0 4px;
-    }
-    #ergonomic-assessment-inner .ergo-final-note {
-      font-size: 0.65rem; opacity: 0.6; margin-bottom: 8px;
-    }
-    #ergonomic-assessment-inner .ergo-final-breakdown {
-      display: flex; flex-direction: column; gap: 3px;
-      font-size: 0.65rem; opacity: 0.8;
-      font-variant-numeric: tabular-nums;
-    }
-    #ergonomic-assessment-inner .ergo-final-breakdown span {
-      display: flex; justify-content: space-between;
     }
     #ergonomic-assessment-inner .ergo-progress {
       margin-top: 12px; padding-top: 10px;
