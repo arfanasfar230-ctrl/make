@@ -10,7 +10,7 @@ const LOOK_SENSITIVITY = 0.002;
 const LOOK_SENSITIVITY_MIN = 0.2;
 const LOOK_SENSITIVITY_MAX = 5;
 /** Mobile touch sensitivity multiplier (fixed, not persisted). */
-const MOBILE_LOOK_SENSITIVITY = 0.75;
+const MOBILE_LOOK_SENSITIVITY = 1.2;
 const GRAVITY_MPS2 = -9.81;
 const MIN_PITCH = -Math.PI / 2.5;
 const MAX_PITCH = Math.PI / 2.5;

@@ -242,7 +242,12 @@ kitchenModel: null,
     const btnVR = document.getElementById('btn-vr')!;
 
     btnDesktop.addEventListener('click', () => this.startGame('desktop'));
-    btnMobile.addEventListener('click', () => this.startGame('mobile'));
+    btnMobile.addEventListener('click', () => {
+      // Must run from the button gesture: browsers otherwise reject fullscreen
+      // and orientation-lock requests.
+      void this.enterMobileLandscape();
+      void this.startGame('mobile');
+    });
     btnVR.addEventListener('click', () => this.startGame('vr'));
 
     this.checkVRSupport(btnVR);
@@ -258,6 +263,23 @@ kitchenModel: null,
       }
     } catch {
       // VR not supported
+    }
+  }
+
+  /** Request an immersive, landscape-sized viewport for touch controls. */
+  private async enterMobileLandscape(): Promise<void> {
+    try {
+      if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+      }
+      if (screen.orientation?.lock) {
+        await screen.orientation.lock('landscape');
+      }
+    } catch {
+      // Some browsers (notably iOS Safari) cannot lock orientation. The
+      // portrait overlay remains the safe fallback in that case.
+    } finally {
+      this.onResize();
     }
   }
 

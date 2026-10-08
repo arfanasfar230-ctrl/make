@@ -24,7 +24,9 @@ export class MobileControls {
   private pendingCancel = false;
   private rotateInput = 0;
 
-  private readonly CAMERA_SMOOTH_FACTOR = 0.15;
+  // Higher factor makes camera swipe follow the finger immediately instead of
+  // feeling delayed by the previous heavy smoothing.
+  private readonly CAMERA_SMOOTH_FACTOR = 0.5;
   private readonly DPAD_ZONE_HEIGHT = 120;
   private readonly UI_ZONE_TOP = 80;
 
