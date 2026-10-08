@@ -76,6 +76,7 @@ export class DesktopControls {
     });
 
     window.addEventListener('wheel', (e) => {
+      if (!this.isPointerLocked) return;
       // deltaY > 0 is scroll down, deltaY < 0 is scroll up
       this.rotateWheelDelta += (e.deltaY > 0 ? 1 : -1) * 35;
     }, { passive: true });

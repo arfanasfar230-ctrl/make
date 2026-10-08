@@ -88,9 +88,9 @@ class KitchenErgonomicsApp {
   private carrotCleaner!: CarrotCleaner;
   private stoveFireMinigame!: StoveFireMinigame;
   private ergonomicAssessment!: ErgonomicAssessmentSystem;
-  /** Popup hasil penilaian; hanya dibuka lewat tombol PREVIEW HASIL. */
+  /** Popup hasil penilaian; hanya dibuka lewat tombol LIHAT NILAI AKHIR. */
   private ergonomicResultModal!: ErgonomicResultModal;
-  /** Hasil penilaian terakhir, dipakai saat tombol PREVIEW HASIL diklik. */
+  /** Hasil penilaian terakhir, dipakai saat tombol LIHAT NILAI AKHIR diklik. */
   private lastAssessmentResult: ErgonomicAssessmentResult | null = null;
   private servingSystem!: ServingSystem;
   private servingSetNode: THREE.Object3D | null = null;
@@ -1048,13 +1048,20 @@ kitchenModel: null,
   }
 
   /**
-   * Tombol PREVIEW HASIL di panel penilaian. Tidak otomatis terbuka: popup
+   * Tombol LIHAT NILAI AKHIR di panel penilaian. Tidak otomatis terbuka: popup
    * hanya muncul di event klik ini, dan hanya jika kelima skor sudah terkunci.
    */
   private setupAssessmentPreviewButton(): void {
     const panel = document.getElementById('ergonomic-assessment-panel');
     const btn = panel?.querySelector<HTMLButtonElement>('[data-field="preview"]');
-    if (!btn) return;
+    if (!panel || !btn) return;
+
+    const assessmentPanel = panel.querySelector<HTMLElement>('#ergonomic-assessment-inner');
+    assessmentPanel?.addEventListener('wheel', (event) => {
+      assessmentPanel.scrollTop += event.deltaY;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
 
     btn.addEventListener('click', () => {
       const result = this.lastAssessmentResult;
@@ -1360,7 +1367,7 @@ kitchenModel: null,
    * Panel penilaian ergonomi: satu baris per aktivitas. Skor live hanya untuk
    * aktivitas yang sedang dikerjakan; baris yang sudah selesai terkunci dan
    * tidak ikut berubah. Skor akhir tidak ada di panel ini — hanya tombol
-   * PREVIEW HASIL yang muncul aktif setelah kelima aktivitas selesai.
+   * LIHAT NILAI AKHIR yang muncul aktif setelah kelima aktivitas selesai.
    */
   private updateErgonomicAssessmentPanel(result: ErgonomicAssessmentResult): void {
     const panel = document.getElementById('ergonomic-assessment-panel') as HTMLElement | null;
@@ -1454,7 +1461,7 @@ kitchenModel: null,
     }
 
     // Skor akhir tidak pernah tampil di tabel live. Setelah kelima aktivitas
-    // selesai, tombol PREVIEW HASIL aktif untuk membuka popup hasil.
+    // selesai, tombol LIHAT NILAI AKHIR aktif untuk membuka popup hasil.
     const allScoresLocked = result.completedCount === result.totalCount && result.finalScore !== null;
 
     const previewBtn = q<HTMLButtonElement>('[data-field="preview"]');

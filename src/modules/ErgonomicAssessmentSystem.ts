@@ -112,7 +112,7 @@ const DEFAULT_CONFIG: ErgonomicAssessmentConfig = {
     MASAK: ACTIVITY_SPECS.MASAK.range,
     SAJIKAN: ACTIVITY_SPECS.SAJIKAN.range,
   },
-  fridgeDoorCollisionPenalty: 5,
+  fridgeDoorCollisionPenalty: 0,
 };
 
 /** Skor pada titik ideal, batas rentang, dan posisi sangat mepet. */
@@ -775,7 +775,7 @@ export function createErgonomicAssessmentPanel(): HTMLElement {
     z-index: 50;
     font-family: 'Segoe UI', system-ui, sans-serif;
     color: #e0e0e0;
-    pointer-events: none;
+    pointer-events: auto;
     max-height: calc(100vh - 120px);
     overflow-y: auto;
   `;
@@ -827,7 +827,7 @@ export function createErgonomicAssessmentPanel(): HTMLElement {
 
     <div class="ergo-preview">
       <button type="button" class="ergo-preview-btn" data-field="preview" disabled>
-        PREVIEW HASIL
+        LIHAT NILAI AKHIR
       </button>
       <p class="ergo-preview-note" data-field="preview-note">Selesaikan kelima aktivitas untuk melihat hasil penilaian.</p>
     </div>
@@ -844,6 +844,23 @@ export function createErgonomicAssessmentPanel(): HTMLElement {
       border-radius: 10px;
       padding: 10px 12px;
       margin-bottom: 12px;
+    }
+    #ergonomic-assessment-inner {
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+      touch-action: pan-y;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.25) transparent;
+    }
+    #ergonomic-assessment-inner::-webkit-scrollbar {
+      width: 8px;
+    }
+    #ergonomic-assessment-inner::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.3);
+      border-radius: 8px;
+    }
+    #ergonomic-assessment-inner::-webkit-scrollbar-thumb:hover {
+      background: rgba(255,255,255,0.5);
     }
     #ergonomic-assessment-inner .ergo-live[data-state="live"] {
       border-color: rgba(76,175,80,0.5);
@@ -927,6 +944,7 @@ export function createErgonomicAssessmentPanel(): HTMLElement {
          jadi tombol ini harus mengambil kliknya kembali. */
       pointer-events: auto;
       width: 100%;
+      min-height: 48px;
       padding: 11px 12px;
       border-radius: 10px;
       border: 1px solid rgba(233,69,96,0.35);
@@ -938,6 +956,8 @@ export function createErgonomicAssessmentPanel(): HTMLElement {
       letter-spacing: 0.08em;
       cursor: not-allowed;
       transition: background 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     #ergonomic-assessment-inner .ergo-preview-btn:disabled {
       opacity: 0.75;
@@ -967,6 +987,51 @@ export function createErgonomicAssessmentPanel(): HTMLElement {
       margin-top: 12px; padding-top: 10px;
       border-top: 1px solid rgba(255,255,255,0.05);
       font-size: 0.68rem; opacity: 0.6;
+    }
+
+    /* Responsive: tablet */
+    @media (max-width: 768px) {
+      #ergonomic-assessment-inner .ergo-live { padding: 8px 10px; }
+      #ergonomic-assessment-inner .ergo-live-name { font-size: 0.75rem; }
+      #ergonomic-assessment-inner .ergo-metric-value { font-size: 1rem; }
+      #ergonomic-assessment-inner .ergo-row { padding: 7px 8px; }
+      #ergonomic-assessment-inner .ergo-row-name { font-size: 0.7rem; }
+      #ergonomic-assessment-inner .ergo-row-score { font-size: 0.85rem; }
+      #ergonomic-assessment-inner .ergo-row-state,
+      #ergonomic-assessment-inner .ergo-row-distance { font-size: 0.58rem; }
+      #ergonomic-assessment-inner .ergo-preview-btn {
+        min-height: 44px;
+        font-size: 0.75rem;
+      }
+      #ergonomic-assessment-inner .ergo-preview-note { font-size: 0.58rem; }
+      #ergonomic-assessment-inner .ergo-progress { font-size: 0.62rem; }
+    }
+
+    /* Responsive: mobile */
+    @media (max-width: 520px) {
+      #ergonomic-assessment-inner .ergo-live { padding: 8px 8px; }
+      #ergonomic-assessment-inner .ergo-live-metrics { gap: 8px; }
+      #ergonomic-assessment-inner .ergo-metric-value { font-size: 0.95rem; }
+      #ergonomic-assessment-inner .ergo-row { padding: 6px 8px; }
+      #ergonomic-assessment-inner .ergo-row-name { font-size: 0.68rem; }
+      #ergonomic-assessment-inner .ergo-row-score { font-size: 0.8rem; }
+      #ergonomic-assessment-inner .ergo-row-bottom { gap: 6px; }
+      #ergonomic-assessment-inner .ergo-row-state,
+      #ergonomic-assessment-inner .ergo-row-distance { font-size: 0.55rem; }
+      #ergonomic-assessment-inner .ergo-preview-btn {
+        min-height: 50px;
+        font-size: 0.85rem;
+      }
+      #ergonomic-assessment-inner .ergo-preview-note { font-size: 0.55rem; }
+    }
+
+    /* Very small screens */
+    @media (max-width: 360px) {
+      #ergonomic-assessment-inner .ergo-live-name { font-size: 0.7rem; }
+      #ergonomic-assessment-inner .ergo-metric-value { font-size: 0.85rem; }
+      #ergonomic-assessment-inner .ergo-row-name { font-size: 0.62rem; }
+      #ergonomic-assessment-inner .ergo-row-score { font-size: 0.75rem; }
+      #ergonomic-assessment-inner .ergo-preview-btn { min-height: 46px; font-size: 0.8rem; }
     }
   `;
   document.head.appendChild(style);
