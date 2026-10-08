@@ -115,10 +115,19 @@
       <div id="crosshair" aria-hidden="true"><span class="cross-dot"></span></div>
     </div>
     <div id="mobile-controls" style="display:none;">
-      <div id="joystick-zone">
-        <div id="joystick-base">
-          <div id="joystick-stick"></div>
-        </div>
+      <div id="dpad-zone" class="dpad-zone">
+        <button id="btn-dpad-up" class="dpad-btn" data-dir="up" aria-label="Maju">
+          <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M7 14l5-5 5 5z"/></svg>
+        </button>
+        <button id="btn-dpad-left" class="dpad-btn" data-dir="left" aria-label="Kiri">
+          <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M14 7l-5 5 5 5z"/></svg>
+        </button>
+        <button id="btn-dpad-right" class="dpad-btn" data-dir="right" aria-label="Kanan">
+          <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M10 7l5 5-5 5z"/></svg>
+        </button>
+        <button id="btn-dpad-down" class="dpad-btn" data-dir="down" aria-label="Mundur">
+          <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+        </button>
       </div>
       <div id="mobile-move-buttons" style="display:none;">
         <button id="btn-mobile-rot-left" class="mobile-move-btn">&#x21BA; 45&deg;</button>
@@ -130,7 +139,6 @@
         <button id="btn-mobile-move" class="mobile-action-btn move-btn" style="display:none;">&#x1F4E6; Pindah</button>
         <button id="btn-mobile-interact" class="mobile-action-btn">E</button>
       </div>
-      <div id="touch-camera-hint">Geser kiri/kanan untuk lihat</div>
     </div>
     <button id="btn-vr-enter" style="display:none;">Masuk VR</button>
     <button id="btn-toggle-debug" style="display:none;">Debug</button>

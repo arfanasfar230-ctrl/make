@@ -27,6 +27,7 @@ html, body {
   top: 0;
   left: 0;
   z-index: 1;
+  touch-action: none;
 }
 
 /* Loading Screen - hidden until a game mode is started */
@@ -599,40 +600,60 @@ html, body {
   pointer-events: auto;
 }
 
-#joystick-zone {
-  position: absolute;
-  left: 24px;
-  bottom: 24px;
-  width: 140px;
-  height: 140px;
+/* D-Pad Zone - bottom left, safe-area aware */
+#dpad-zone {
+  position: fixed;
+  left: max(16px, env(safe-area-inset-left));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-areas:
+    ". up ."
+    "left . right"
+    ". down .";
+  gap: 8px;
+  z-index: 30;
+  pointer-events: auto;
 }
 
-#joystick-base {
-  width: 120px;
-  height: 120px;
-  background: rgba(255,255,255,0.08);
-  border: 2px solid rgba(255,255,255,0.15);
-  border-radius: 50%;
-  position: relative;
+.dpad-btn {
+  width: clamp(52px, 11vw, 72px);
+  height: clamp(52px, 11vw, 72px);
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 12px;
+  background: rgba(0, 30, 60, 0.85);
+  border: 1px solid rgba(0, 200, 255, 0.4);
+  color: #c8eeff;
   display: flex;
   align-items: center;
   justify-content: center;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-#joystick-stick {
-  width: 48px;
-  height: 48px;
-  background: rgba(255,255,255,0.25);
-  border: 2px solid rgba(255,255,255,0.4);
-  border-radius: 50%;
-  position: absolute;
-  transition: none;
+.dpad-btn svg {
+  width: 28px;
+  height: 28px;
+  pointer-events: none;
 }
+
+.dpad-btn:active {
+  background: rgba(0, 100, 180, 0.8);
+  transform: scale(0.96);
+}
+
+.dpad-btn[data-dir="up"] { grid-area: up; }
+.dpad-btn[data-dir="down"] { grid-area: down; }
+.dpad-btn[data-dir="left"] { grid-area: left; }
+.dpad-btn[data-dir="right"] { grid-area: right; }
 
 #mobile-buttons {
   position: absolute;
-  right: 24px;
-  bottom: 24px;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
 }
 
 .mobile-action-btn {
@@ -645,21 +666,12 @@ html, body {
   font-size: 1.2rem;
   font-weight: 700;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .mobile-action-btn:active {
   background: rgba(233, 69, 96, 0.7);
-}
-
-#touch-camera-hint {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 0.7rem;
-  opacity: 0.3;
-  pointer-events: none;
-  white-space: nowrap;
 }
 
 /* VR Button */

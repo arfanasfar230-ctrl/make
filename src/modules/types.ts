@@ -95,6 +95,8 @@ export interface ControlInput {
   moveToggle?: boolean;
   placeItem?: boolean;
   cancelMove?: boolean;
+  /** Whether the current input is from mobile mode. Used for mobile-specific sensitivity. */
+  isMobile?: boolean;
 }
 
 export interface CollisionBox {

@@ -9,6 +9,8 @@ const PLAYER_SPEED_MPS = 3.5;
 const LOOK_SENSITIVITY = 0.002;
 const LOOK_SENSITIVITY_MIN = 0.2;
 const LOOK_SENSITIVITY_MAX = 5;
+/** Mobile touch sensitivity multiplier (fixed, not persisted). */
+const MOBILE_LOOK_SENSITIVITY = 0.75;
 const GRAVITY_MPS2 = -9.81;
 const MIN_PITCH = -Math.PI / 2.5;
 const MAX_PITCH = Math.PI / 2.5;
@@ -26,6 +28,8 @@ export class PlayerController {
   private gravity: number;
   private headHeight: number;
   private lookSensitivity: number = 1;
+  private mobileLookSensitivity: number = MOBILE_LOOK_SENSITIVITY;
+  private isMobileMode: boolean = false;
 
   constructor(ctx: SceneContext, spawnPosition?: THREE.Vector3) {
     this.ctx = ctx;
@@ -105,8 +109,11 @@ export class PlayerController {
 
   update(input: ControlInput, deltaTime: number, collisionCheck: (pos: THREE.Vector3, radius: number) => THREE.Vector3): void {
     if (!this.vrMode) {
-      this.yaw -= input.lookX * LOOK_SENSITIVITY * this.lookSensitivity;
-      this.pitch -= input.lookY * LOOK_SENSITIVITY * this.lookSensitivity;
+      const sensitivity = this.isMobileMode
+        ? this.mobileLookSensitivity
+        : this.lookSensitivity;
+      this.yaw -= input.lookX * LOOK_SENSITIVITY * sensitivity;
+      this.pitch -= input.lookY * LOOK_SENSITIVITY * sensitivity;
       this.pitch = THREE.MathUtils.clamp(this.pitch, MIN_PITCH, MAX_PITCH);
       // Keep yaw bounded so free 360-degree turning never overflows to huge
       // numbers. The movement math below treats all yaw values the same.
@@ -231,5 +238,19 @@ export class PlayerController {
 
   public getLookSensitivity(): number {
     return this.lookSensitivity;
+  }
+
+  /** Enable/disable mobile mode for touch-specific sensitivity. */
+  public setMobileMode(enabled: boolean): void {
+    this.isMobileMode = enabled;
+  }
+
+  /** Mobile touch sensitivity multiplier (clamped, default 0.75). Not persisted. */
+  public setMobileLookSensitivity(value: number): void {
+    this.mobileLookSensitivity = THREE.MathUtils.clamp(value, 0.1, 3);
+  }
+
+  public getMobileLookSensitivity(): number {
+    return this.mobileLookSensitivity;
   }
 }

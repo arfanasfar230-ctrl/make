@@ -1,127 +1,111 @@
 import type { ControlInput } from './types';
 
 export class MobileControls {
-  private joystickBase: HTMLElement;
-  private joystickStick: HTMLElement;
-  private interactBtn: HTMLElement;
-  private moveBtn: HTMLElement | null;
-  private touchZone: HTMLElement;
+  private dpadUp: HTMLButtonElement;
+  private dpadDown: HTMLButtonElement;
+  private dpadLeft: HTMLButtonElement;
+  private dpadRight: HTMLButtonElement;
+  private interactBtn: HTMLButtonElement;
+  private moveBtn: HTMLButtonElement | null;
   private moveButtonsZone: HTMLElement | null;
+  private canvas: HTMLCanvasElement;
+  private portraitOverlay: HTMLElement;
 
-  private stickPos = { x: 0, y: 0 };
-  private stickTouchId: number | null = null;
+  private dpadState = { up: false, down: false, left: false, right: false };
+
   private cameraTouchId: number | null = null;
   private lastCameraTouch = { x: 0, y: 0 };
-  private lookDelta = { x: 0, y: 0 };
-  private pendingInteract: boolean = false;
-  private pendingMoveToggle: boolean = false;
-  private pendingPlace: boolean = false;
-  private pendingCancel: boolean = false;
-  private rotateInput: number = 0;
+  private rawLookDelta = { x: 0, y: 0 };
+  private smoothedLookDelta = { x: 0, y: 0 };
 
-  private readonly STICK_RADIUS = 40;
-  private readonly DEAD_ZONE = 0.15;
+  private pendingInteract = false;
+  private pendingMoveToggle = false;
+  private pendingPlace = false;
+  private pendingCancel = false;
+  private rotateInput = 0;
+
+  private readonly MOBILE_CAMERA_SENSITIVITY = 0.0015;
+  private readonly CAMERA_SMOOTH_FACTOR = 0.15;
+  private readonly DPAD_ZONE_HEIGHT = 120;
+  private readonly UI_ZONE_TOP = 80;
+
+  private isPortraitPaused = false;
+  private boundHandlers: { target: EventTarget; event: string; handler: EventListenerOrEventListenerObject; options?: AddEventListenerOptions }[] = [];
 
   constructor() {
-    this.joystickBase = document.getElementById('joystick-base')!;
-    this.joystickStick = document.getElementById('joystick-stick')!;
-    this.interactBtn = document.getElementById('btn-mobile-interact')!;
-    this.moveBtn = document.getElementById('btn-mobile-move');
-    this.touchZone = document.getElementById('mobile-controls')!;
+    this.dpadUp = document.getElementById('btn-dpad-up') as HTMLButtonElement;
+    this.dpadDown = document.getElementById('btn-dpad-down') as HTMLButtonElement;
+    this.dpadLeft = document.getElementById('btn-dpad-left') as HTMLButtonElement;
+    this.dpadRight = document.getElementById('btn-dpad-right') as HTMLButtonElement;
+    this.interactBtn = document.getElementById('btn-mobile-interact') as HTMLButtonElement;
+    this.moveBtn = document.getElementById('btn-mobile-move') as HTMLButtonElement | null;
     this.moveButtonsZone = document.getElementById('mobile-move-buttons');
+    this.canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
+    this.portraitOverlay = document.getElementById('portrait-overlay')!;
 
-    this.setupJoystick();
-    this.setupCamera();
+    this.setupDpad();
+    this.setupCameraSwipe();
     this.setupInteractButton();
     this.setupMoveButtons();
+    this.setupOrientationLock();
   }
 
-  private setupJoystick(): void {
-    const base = this.joystickBase;
+  private addListener(target: EventTarget, event: string, handler: (e: any) => void, options?: AddEventListenerOptions): void {
+    target.addEventListener(event, handler, options);
+    this.boundHandlers.push({ target, event, handler, options });
+  }
 
-    base.addEventListener('touchstart', (e) => {
-      e.preventDefault();
-      if (this.stickTouchId !== null) return;
-      const touch = e.changedTouches[0];
-      this.stickTouchId = touch.identifier;
-      this.updateStickPosition(touch);
-    }, { passive: false });
-
-    const onMove = (e: TouchEvent) => {
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
-        if (touch.identifier === this.stickTouchId) {
-          e.preventDefault();
-          this.updateStickPosition(touch);
-          break;
-        }
-      }
+  private setupDpad(): void {
+    const setDirection = (dir: keyof typeof this.dpadState, value: boolean) => {
+      this.dpadState[dir] = value;
     };
 
-    const onEnd = (e: TouchEvent) => {
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
-        if (touch.identifier === this.stickTouchId) {
-          this.stickTouchId = null;
-          this.stickPos = { x: 0, y: 0 };
-          this.joystickStick.style.transform = 'translate(0px, 0px)';
-          break;
-        }
-      }
-    };
+    this.addListener(this.dpadUp, 'touchstart', (e) => { e.preventDefault(); setDirection('up', true); }, { passive: false });
+    this.addListener(this.dpadUp, 'touchend', () => setDirection('up', false));
+    this.addListener(this.dpadUp, 'touchcancel', () => setDirection('up', false));
 
-    document.addEventListener('touchmove', onMove, { passive: false });
-    document.addEventListener('touchend', onEnd);
-    document.addEventListener('touchcancel', onEnd);
+    this.addListener(this.dpadDown, 'touchstart', (e) => { e.preventDefault(); setDirection('down', true); }, { passive: false });
+    this.addListener(this.dpadDown, 'touchend', () => setDirection('down', false));
+    this.addListener(this.dpadDown, 'touchcancel', () => setDirection('down', false));
+
+    this.addListener(this.dpadLeft, 'touchstart', (e) => { e.preventDefault(); setDirection('left', true); }, { passive: false });
+    this.addListener(this.dpadLeft, 'touchend', () => setDirection('left', false));
+    this.addListener(this.dpadLeft, 'touchcancel', () => setDirection('left', false));
+
+    this.addListener(this.dpadRight, 'touchstart', (e) => { e.preventDefault(); setDirection('right', true); }, { passive: false });
+    this.addListener(this.dpadRight, 'touchend', () => setDirection('right', false));
+    this.addListener(this.dpadRight, 'touchcancel', () => setDirection('right', false));
   }
 
-  private updateStickPosition(touch: Touch): void {
-    const rect = this.joystickBase.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-
-    let dx = touch.clientX - centerX;
-    let dy = touch.clientY - centerY;
-
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist > this.STICK_RADIUS) {
-      dx = (dx / dist) * this.STICK_RADIUS;
-      dy = (dy / dist) * this.STICK_RADIUS;
-    }
-
-    this.joystickStick.style.transform = `translate(${dx}px, ${dy}px)`;
-
-    this.stickPos.x = dx / this.STICK_RADIUS;
-    this.stickPos.y = -dy / this.STICK_RADIUS;
-  }
-
-  private setupCamera(): void {
-    this.touchZone.addEventListener('touchstart', (e) => {
+  private setupCameraSwipe(): void {
+    this.addListener(this.canvas, 'touchstart', (e: TouchEvent) => {
+      if (this.isPortraitPaused) return;
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
-        if (touch.identifier === this.stickTouchId) continue;
         if (this.cameraTouchId !== null) continue;
+        if (this.isTouchInDpadZone(touch)) continue;
+        if (this.isTouchInUiZone(touch)) continue;
 
-        const rect = this.touchZone.getBoundingClientRect();
-        if (touch.clientX > rect.width * 0.4) {
-          this.cameraTouchId = touch.identifier;
-          this.lastCameraTouch = { x: touch.clientX, y: touch.clientY };
-          break;
-        }
+        this.cameraTouchId = touch.identifier;
+        this.lastCameraTouch = { x: touch.clientX, y: touch.clientY };
+        break;
       }
     }, { passive: true });
 
     const onMove = (e: TouchEvent) => {
+      if (this.isPortraitPaused) return;
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
-        if (touch.identifier === this.cameraTouchId) {
-          const dx = touch.clientX - this.lastCameraTouch.x;
-          const dy = touch.clientY - this.lastCameraTouch.y;
-          this.lookDelta.x += dx * 0.3;
-          this.lookDelta.y += dy * 0.3;
-          this.lastCameraTouch = { x: touch.clientX, y: touch.clientY };
-          break;
-        }
+        if (touch.identifier !== this.cameraTouchId) continue;
+
+        const dx = touch.clientX - this.lastCameraTouch.x;
+        const dy = touch.clientY - this.lastCameraTouch.y;
+
+        this.rawLookDelta.x += dx * this.MOBILE_CAMERA_SENSITIVITY;
+        this.rawLookDelta.y += dy * this.MOBILE_CAMERA_SENSITIVITY;
+
+        this.lastCameraTouch = { x: touch.clientX, y: touch.clientY };
+        break;
       }
     };
 
@@ -134,19 +118,30 @@ export class MobileControls {
       }
     };
 
-    document.addEventListener('touchmove', onMove, { passive: true });
-    document.addEventListener('touchend', onEnd);
-    document.addEventListener('touchcancel', onEnd);
+    this.addListener(this.canvas, 'touchmove', onMove, { passive: true });
+    this.addListener(this.canvas, 'touchend', onEnd);
+    this.addListener(this.canvas, 'touchcancel', onEnd);
+  }
+
+  private isTouchInDpadZone(touch: Touch): boolean {
+    const rect = this.canvas.getBoundingClientRect();
+    return touch.clientY > rect.bottom - this.DPAD_ZONE_HEIGHT &&
+           touch.clientX < rect.left + 160;
+  }
+
+  private isTouchInUiZone(touch: Touch): boolean {
+    const rect = this.canvas.getBoundingClientRect();
+    return touch.clientY < rect.top + this.UI_ZONE_TOP;
   }
 
   private setupInteractButton(): void {
-    this.interactBtn.addEventListener('touchstart', (e) => {
+    this.addListener(this.interactBtn, 'touchstart', (e) => {
       e.preventDefault();
       this.pendingInteract = true;
     }, { passive: false });
 
     if (this.moveBtn) {
-      this.moveBtn.addEventListener('touchstart', (e) => {
+      this.addListener(this.moveBtn, 'touchstart', (e) => {
         e.preventDefault();
         this.pendingMoveToggle = true;
       }, { passive: false });
@@ -160,38 +155,66 @@ export class MobileControls {
     const cancelBtn = document.getElementById('btn-mobile-cancel');
 
     if (rotLeft) {
-      rotLeft.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        this.rotateInput = -1;
-      }, { passive: false });
-      rotLeft.addEventListener('touchend', () => {
-        this.rotateInput = 0;
-      });
+      this.addListener(rotLeft, 'touchstart', (e) => { e.preventDefault(); this.rotateInput = -1; }, { passive: false });
+      this.addListener(rotLeft, 'touchend', () => { this.rotateInput = 0; });
+      this.addListener(rotLeft, 'touchcancel', () => { this.rotateInput = 0; });
     }
-
     if (rotRight) {
-      rotRight.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        this.rotateInput = 1;
-      }, { passive: false });
-      rotRight.addEventListener('touchend', () => {
-        this.rotateInput = 0;
+      this.addListener(rotRight, 'touchstart', (e) => { e.preventDefault(); this.rotateInput = 1; }, { passive: false });
+      this.addListener(rotRight, 'touchend', () => { this.rotateInput = 0; });
+      this.addListener(rotRight, 'touchcancel', () => { this.rotateInput = 0; });
+    }
+    if (placeBtn) {
+      this.addListener(placeBtn, 'touchstart', (e) => { e.preventDefault(); this.pendingPlace = true; }, { passive: false });
+    }
+    if (cancelBtn) {
+      this.addListener(cancelBtn, 'touchstart', (e) => { e.preventDefault(); this.pendingCancel = true; }, { passive: false });
+    }
+  }
+
+  private setupOrientationLock(): void {
+    const checkOrientation = () => {
+      const isPortrait = window.matchMedia('(orientation: portrait)').matches;
+      if (isPortrait) {
+        this.pauseForPortrait();
+        if (screen.orientation && typeof screen.orientation.lock === 'function') {
+          screen.orientation.lock('landscape').catch(() => {
+            // Lock failed, overlay stays visible
+          });
+        }
+      } else {
+        this.resumeFromPortrait();
+      }
+    };
+
+    this.addListener(window, 'orientationchange', checkOrientation);
+    this.addListener(window, 'resize', checkOrientation);
+
+    const dismissBtn = document.getElementById('btn-dismiss-portrait');
+    if (dismissBtn) {
+      this.addListener(dismissBtn, 'click', () => {
+        this.portraitOverlay.style.display = 'none';
       });
     }
 
-    if (placeBtn) {
-      placeBtn.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        this.pendingPlace = true;
-      }, { passive: false });
-    }
+    checkOrientation();
+  }
 
-    if (cancelBtn) {
-      cancelBtn.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        this.pendingCancel = true;
-      }, { passive: false });
-    }
+  private pauseForPortrait(): void {
+    if (this.isPortraitPaused) return;
+    this.isPortraitPaused = true;
+    this.portraitOverlay.style.display = 'flex';
+    this.resetAllInputs();
+  }
+
+  private resumeFromPortrait(): void {
+    if (!this.isPortraitPaused) return;
+    this.isPortraitPaused = false;
+    this.portraitOverlay.style.display = 'none';
+  }
+
+  public isPortraitPausedState(): boolean {
+    return this.isPortraitPaused;
   }
 
   public setMoveMode(active: boolean): void {
@@ -213,20 +236,46 @@ export class MobileControls {
   }
 
   public getInput(): ControlInput {
+    if (this.isPortraitPaused) {
+      return this.getZeroInput();
+    }
+
+    let moveForward = 0;
+    let moveRight = 0;
+
+    if (this.dpadState.up) moveForward += 1;
+    if (this.dpadState.down) moveForward -= 1;
+    if (this.dpadState.right) moveRight += 1;
+    if (this.dpadState.left) moveRight -= 1;
+
+    if (moveForward !== 0 && moveRight !== 0) {
+      const invSqrt2 = 0.7071067811865475;
+      moveForward *= invSqrt2;
+      moveRight *= invSqrt2;
+    }
+
+    this.smoothedLookDelta.x += (this.rawLookDelta.x - this.smoothedLookDelta.x) * this.CAMERA_SMOOTH_FACTOR;
+    this.smoothedLookDelta.y += (this.rawLookDelta.y - this.smoothedLookDelta.y) * this.CAMERA_SMOOTH_FACTOR;
+
+    const lookX = this.smoothedLookDelta.x;
+    const lookY = this.smoothedLookDelta.y;
+
+    this.rawLookDelta.x = 0;
+    this.rawLookDelta.y = 0;
+
     const input: ControlInput = {
-      moveForward: Math.abs(this.stickPos.y) > this.DEAD_ZONE ? this.stickPos.y : 0,
-      moveRight: Math.abs(this.stickPos.x) > this.DEAD_ZONE ? this.stickPos.x : 0,
-      lookX: this.lookDelta.x,
-      lookY: this.lookDelta.y,
+      moveForward,
+      moveRight,
+      lookX,
+      lookY,
       interact: this.pendingInteract,
       rotateInput: this.rotateInput,
       moveToggle: this.pendingMoveToggle,
       placeItem: this.pendingPlace,
       cancelMove: this.pendingCancel,
+      isMobile: true,
     };
 
-    this.lookDelta.x = 0;
-    this.lookDelta.y = 0;
     this.pendingInteract = false;
     this.pendingMoveToggle = false;
     this.pendingPlace = false;
@@ -235,7 +284,38 @@ export class MobileControls {
     return input;
   }
 
+  private getZeroInput(): ControlInput {
+    return {
+      moveForward: 0,
+      moveRight: 0,
+      lookX: 0,
+      lookY: 0,
+      interact: false,
+      rotateInput: 0,
+      moveToggle: false,
+      placeItem: false,
+      cancelMove: false,
+      isMobile: true,
+    };
+  }
+
+  private resetAllInputs(): void {
+    this.dpadState = { up: false, down: false, left: false, right: false };
+    this.rawLookDelta = { x: 0, y: 0 };
+    this.smoothedLookDelta = { x: 0, y: 0 };
+    this.pendingInteract = false;
+    this.pendingMoveToggle = false;
+    this.pendingPlace = false;
+    this.pendingCancel = false;
+    this.rotateInput = 0;
+    this.cameraTouchId = null;
+  }
+
   public dispose(): void {
-    // Cleanup listeners handled by DOM element removal
+    for (const { target, event, handler, options } of this.boundHandlers) {
+      target.removeEventListener(event, handler, options);
+    }
+    this.boundHandlers = [];
+    this.resetAllInputs();
   }
 }

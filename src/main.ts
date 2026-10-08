@@ -500,6 +500,9 @@ kitchenModel: null,
       this.setupReachIndicator();
 
       if (mode === 'desktop') {
+        this.mobileControls?.dispose();
+        this.mobileControls = null;
+        this.player.setMobileMode(false);
         this.desktopControls = new DesktopControls(
           this.ctx.renderer.domElement as HTMLCanvasElement,
           (locked) => {
@@ -518,7 +521,11 @@ kitchenModel: null,
         this.mobileControlsEl.style.display = 'block';
         this.pointerLockHint.style.display = 'none';
         this.sensitivityWrap.style.display = 'none';
+        this.player.setMobileMode(true);
       } else if (mode === 'vr') {
+        this.mobileControls?.dispose();
+        this.mobileControls = null;
+        this.player.setMobileMode(false);
         const vrBtn = document.getElementById('btn-vr-enter')!;
         try {
           this.vrSystem = new VRSystem(
@@ -555,6 +562,9 @@ kitchenModel: null,
       this.loadingScreen.style.display = 'none';
       this.modeSelection.style.display = 'flex';
       this.currentMode = 'desktop';
+      this.player.setMobileMode(false);
+      this.mobileControls?.dispose();
+      this.mobileControls = null;
     }
   }
 
@@ -1501,6 +1511,11 @@ kitchenModel: null,
       input = this.desktopControls.getInput();
     } else if (this.currentMode === 'mobile' && this.mobileControls) {
       input = this.mobileControls.getInput();
+      // Pause game if mobile is in portrait orientation
+      if (this.mobileControls.isPortraitPausedState()) {
+        this.renderer.render(this.scene, this.camera);
+        return;
+      }
     } else if (this.currentMode === 'vr' && this.vrSystem) {
       if (this.vrSystem.isInVR()) {
         input = this.vrSystem.getInput();
