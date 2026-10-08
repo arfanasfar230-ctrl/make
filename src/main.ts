@@ -39,12 +39,12 @@ const NON_ANALYZABLE_CATEGORIES = new Set<KitchenObjectCategory>(['sink', 'fridg
 // Panci dekoratif di atas Meja Kerja Dapur 3 (G_8). X/Z adalah posisi world
 // target; Y ditentukan lewat raycast ke bawah agar dasar panci tepat di
 // permukaan meja (G_8), bukan di backsplash. Versi baru lebih kecil (0.19 m).
-const PAN_GLB = `${GLB_BASE}panci-opt.glb`;
+const PAN_GLB = `${GLB_BASE}panci.glb`;
 const PAN_TARGET_X = 19.1;
 const PAN_TARGET_Z = 4.4;
 const PAN_TARGET_HEIGHT_M = 0.19;
 
-// Kulkas (public/kulkas-opt.glb) adalah objek tetap: posisinya dikunci di koordinat
+// Kulkas (public/kulkas.glb) adalah objek tetap: posisinya dikunci di koordinat
 // ini dan tidak bisa digeser/diputar pemain (tombol Pindah hanya untuk perabot lain).
 // X/Z adalah koordinat world yang diminta; Y tetap diturunkan dari floorY agar
 // dasar kulkas menempel lantai. Sisi pintu pada model ada di +Z lokal, jadi
@@ -53,13 +53,13 @@ const PAN_TARGET_HEIGHT_M = 0.19;
 const FRIDGE_TARGET_X = 10.85;
 const FRIDGE_TARGET_Z = 29.08;
 
-// Set penyajian dekoratif (public/low_poly_tableware-opt.glb) di atas worktop
+// Set penyajian dekoratif (public/low_poly_tableware.glb) di atas worktop
 // G_121, di area bekas klaster bumbu (_ra2/Mesh10 yang sudah dihapus). X/Z
 // adalah posisi world; Y ditentukan lewat raycast ke bawah (findTableSurfaceY)
 // agar dasar placemat menempel persis di permukaan slab (Mesh11, y≈8.8).
 // Skala dinormalisasi ke diameter piring (anchor Dish) 0.20 m; jika mesh
 // piring tidak ditemukan, fallback ke lebar placemat (0.334 m).
-const SAJI_GLB = `${GLB_BASE}low_poly_tableware-opt.glb`;
+const SAJI_GLB = `${GLB_BASE}low_poly_tableware.glb`;
 const SAJI_TARGET_X = 12.59;
 const SAJI_TARGET_Z = 3.45;
 const SAJI_TARGET_WIDTH_M = 0.2; // diameter piring target (anchor Dish)
@@ -332,10 +332,10 @@ kitchenModel: null,
     this.loadingScreen.style.display = 'flex';
 
     try {
-      const glbUrl = `${GLB_BASE}simple_linear_kitchen-opt.glb`;
+      const glbUrl = `${GLB_BASE}simple_linear_kitchen.glb`;
       const model = await this.withTimeout(
         this.assetLoader.loadKitchen(glbUrl, this.ctx),
-        15000,
+        45000,
         'Waktu memuat model habis'
       );
       this.ctx.kitchenModel = model;
@@ -562,7 +562,7 @@ kitchenModel: null,
       this.loadingScreen.style.display = 'none';
       this.modeSelection.style.display = 'flex';
       this.currentMode = 'desktop';
-      this.player.setMobileMode(false);
+      this.player?.setMobileMode(false);
       this.mobileControls?.dispose();
       this.mobileControls = null;
     }
@@ -578,7 +578,7 @@ kitchenModel: null,
   }
 
   private async loadFridge(): Promise<void> {
-    const fridgeUrl = `${GLB_BASE}kulkas-opt.glb`;
+    const fridgeUrl = `${GLB_BASE}kulkas.glb`;
     const loader = new GLTFLoader();
     const gltf = await loader.loadAsync(fridgeUrl);
     const fridgeModel = gltf.scene;
@@ -867,7 +867,7 @@ kitchenModel: null,
   }
 
   private async loadJendelaG1(): Promise<void> {
-    const windowUrl = `${GLB_BASE}models/Jendela_G1-opt.glb`;
+    const windowUrl = `${GLB_BASE}models/Jendela_G1.glb`;
     const loader = new GLTFLoader();
     const gltf = await loader.loadAsync(windowUrl);
     const windowModel = gltf.scene;
