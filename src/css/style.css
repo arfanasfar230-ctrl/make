@@ -734,6 +734,106 @@ html, body {
   .mode-btn svg { width: 36px; height: 36px; }
 }
 
+/* Compact game HUD for phones held horizontally.  This targets viewport
+   height rather than width, so desktop and tablet layouts are unchanged. */
+@media (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+  #hud-top {
+    top: 6px;
+    left: 8px;
+    right: 8px;
+    gap: 6px;
+  }
+
+  #player-info {
+    padding: 4px 8px;
+    font-size: 0.68rem;
+  }
+
+  #ergonomics-panel {
+    top: 42px;
+    right: max(8px, env(safe-area-inset-right));
+    width: min(250px, 34vw);
+    max-height: calc(100dvh - 54px);
+    padding: 10px;
+    border-radius: 10px;
+  }
+
+  #ergo-header { margin-bottom: 8px; }
+  #ergo-score-container { gap: 8px; margin-bottom: 8px; }
+  #ergo-score-circle,
+  #ergo-score-circle svg { width: 56px; height: 56px; }
+  #ergo-score-value { font-size: 1rem; }
+  #ergo-score-label { bottom: 5px; font-size: 0.5rem; }
+  #ergo-status { font-size: 0.82rem; }
+  .ergo-detail-row { padding: 3px 0; font-size: 0.68rem; }
+  .ergo-detail-bar { width: 58px; height: 4px; }
+  #ergo-recommendations { padding: 7px; font-size: 0.66rem; line-height: 1.3; }
+
+  #ergonomic-assessment-inner {
+    top: 42px !important;
+    right: max(8px, env(safe-area-inset-right)) !important;
+    width: min(240px, 33vw) !important;
+    max-height: calc(100dvh - 54px) !important;
+    padding: 10px !important;
+    border-radius: 10px !important;
+    font-size: 0.72rem;
+  }
+
+  #interaction-prompt {
+    bottom: 10px;
+    padding: 6px 12px;
+    font-size: 0.68rem;
+    max-width: 42vw;
+    text-align: center;
+  }
+
+  #interaction-panel { bottom: 62px; }
+  #interaction-panel .interaction-panel-content {
+    min-width: 170px;
+    padding: 10px 12px;
+    border-radius: 10px;
+  }
+  #interaction-panel h4 { margin-bottom: 7px; font-size: 0.76rem; }
+  .interaction-option-btn { padding: 7px 10px; margin: 4px 0; font-size: 0.72rem; }
+
+  #dpad-zone {
+    left: max(8px, env(safe-area-inset-left));
+    bottom: max(8px, env(safe-area-inset-bottom));
+    gap: 5px;
+  }
+  .dpad-btn {
+    width: clamp(42px, 8vw, 56px);
+    height: clamp(42px, 8vw, 56px);
+    min-width: 42px;
+    min-height: 42px;
+    border-radius: 10px;
+  }
+  .dpad-btn svg { width: 22px; height: 22px; }
+  #mobile-buttons {
+    right: max(8px, env(safe-area-inset-right));
+    bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  .mobile-action-btn { width: 46px; height: 46px; font-size: 1rem; }
+
+  #mobile-move-buttons { bottom: 8px; gap: 6px; }
+  .mobile-move-btn { padding: 8px 10px; font-size: 0.68rem; }
+
+  #carrot-cleaner-popup {
+    width: min(62vw, 340px) !important;
+    height: min(78dvh, 330px) !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    border-radius: 12px !important;
+  }
+  #stove-fire-minigame-popup {
+    width: min(58vw, 330px) !important;
+    height: min(70dvh, 280px) !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    border-radius: 12px !important;
+  }
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
