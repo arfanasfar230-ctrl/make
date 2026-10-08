@@ -24,7 +24,6 @@ export class MobileControls {
   private pendingCancel = false;
   private rotateInput = 0;
 
-  private readonly MOBILE_CAMERA_SENSITIVITY = 0.0015;
   private readonly CAMERA_SMOOTH_FACTOR = 0.15;
   private readonly DPAD_ZONE_HEIGHT = 120;
   private readonly UI_ZONE_TOP = 80;
@@ -101,8 +100,9 @@ export class MobileControls {
         const dx = touch.clientX - this.lastCameraTouch.x;
         const dy = touch.clientY - this.lastCameraTouch.y;
 
-        this.rawLookDelta.x += dx * this.MOBILE_CAMERA_SENSITIVITY;
-        this.rawLookDelta.y += dy * this.MOBILE_CAMERA_SENSITIVITY;
+        // PlayerController applies mobile sensitivity to these pixel deltas.
+        this.rawLookDelta.x += dx;
+        this.rawLookDelta.y += dy;
 
         this.lastCameraTouch = { x: touch.clientX, y: touch.clientY };
         break;
