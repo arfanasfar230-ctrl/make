@@ -1,16 +1,16 @@
-import * as THREE from 'three';
-import type { SceneContext } from './types';
-import { WindowSystem, WindowData } from './WindowSystem';
-import { FaucetWater } from './FaucetWater';
-import { computeFaucetWaterAnchor } from './AssetLoader';
-import { FridgeInteractionSystem } from './FridgeInteractionSystem';
-import { StoveFireMinigame } from './StoveFireMinigame';
-import { ErgonomicAssessmentSystem } from './ErgonomicAssessmentSystem';
-import { ServingSystem } from './ServingSystem';
+import * as THREE from "three";
+import type { SceneContext } from "./types";
+import { WindowSystem, WindowData } from "./WindowSystem";
+import { FaucetWater } from "./FaucetWater";
+import { computeFaucetWaterAnchor } from "./AssetLoader";
+import { FridgeInteractionSystem } from "./FridgeInteractionSystem";
+import { StoveFireMinigame } from "./StoveFireMinigame";
+import { ErgonomicAssessmentSystem } from "./ErgonomicAssessmentSystem";
+import { ServingSystem } from "./ServingSystem";
 
-export const INTERACT_PROMPT = 'klik/f untuk berinteraksi';
+export const INTERACT_PROMPT = "klik/f untuk berinteraksi";
 
-export type InteractableType = 'faucet' | 'window' | 'stove' | 'fridge' | 'serving_table' | 'none';
+export type InteractableType = "faucet" | "window" | "stove" | "fridge" | "serving_table" | "none";
 
 export interface InteractionTarget {
   object: THREE.Object3D;
@@ -29,7 +29,7 @@ export class InteractionSystem {
   private fridgeRoot: THREE.Object3D | null = null;
   private stoveRoot: THREE.Object3D | null = null;
   private hovered: THREE.Object3D | null = null;
-  private hoveredType: InteractableType = 'none';
+  private hoveredType: InteractableType = "none";
   private highlightMats: Array<{ mat: THREE.Material & { emissive?: THREE.Color }; hex: number }> = [];
   private windowSystem: WindowSystem;
   private water: FaucetWater | null = null;
@@ -51,7 +51,7 @@ export class InteractionSystem {
       model.traverse((child) => {
         if (child.userData.interactable === true) {
           this.roots.push(child);
-          if (child.userData.interaction === 'faucet') {
+          if (child.userData.interaction === "faucet") {
             if (child.userData.faucet) {
               faucetWithWater = child;
             } else {
@@ -59,14 +59,14 @@ export class InteractionSystem {
             }
           }
         }
-        if (child.userData.interactable === true && child.userData.interaction === 'window') {
+        if (child.userData.interactable === true && child.userData.interaction === "window") {
           this.windowRoots.set(child.userData.windowName, child);
         }
-        if (child.userData.isFridge === true || child.name === 'kulkas') {
+        if (child.userData.isFridge === true || child.name === "kulkas") {
           this.fridgeRoot = child;
           this.roots.push(child);
         }
-        if (child.userData.interaction === 'stove' || child.name === 'kompor') {
+        if (child.userData.interaction === "stove" || child.name === "kompor") {
           this.stoveRoot = child;
           this.roots.push(child);
         }
@@ -124,11 +124,6 @@ export class InteractionSystem {
     this.ergonomicAssessment = sys;
   }
 
-  /**
-   * Mendaftarkan root interaksi yang dimuat SETELAH constructor, mis. set
-   * penyajian (low_poly_tableware.glb) yang di-load sesudah InteractionSystem
-   * dibuat. Idempotent agar root yang sama tidak ter-raycast dua kali.
-   */
   public registerInteractable(root: THREE.Object3D): void {
     if (!this.roots.includes(root)) {
       this.roots.push(root);
@@ -162,7 +157,7 @@ export class InteractionSystem {
     return this.hovered;
   }
 
-  private findInteractable(obj: THREE.Object3D | null): THREE.Object3D | null {
+  public findInteractable(obj: THREE.Object3D | null): THREE.Object3D | null {
     let node = obj;
     while (node) {
       if (node.userData.interactable === true) return node;
@@ -171,10 +166,10 @@ export class InteractionSystem {
     return null;
   }
 
-  private setHovered(root: THREE.Object3D | null): void {
+  public setHovered(root: THREE.Object3D | null): void {
     if (root === this.hovered) return;
     this.hovered = root;
-    this.hoveredType = root?.userData.interaction as InteractableType ?? 'none';
+    this.hoveredType = root?.userData.interaction as InteractableType ?? "none";
     const on = root !== null;
     for (const entry of this.highlightMats) {
       if (entry.mat.emissive) {
@@ -193,43 +188,42 @@ export class InteractionSystem {
 
   public getHoverLabel(): string | null {
     if (!this.hovered) return null;
-    if (this.hoveredType === 'faucet') return 'klik/f untuk menyalakan/mematikan kran';
-    if (this.hoveredType === 'window') return 'klik/f untuk membuka/menutup jendela';
-    if (this.hoveredType === 'stove') return 'klik/f untuk menyalakan/mematikan kompor';
-    if (this.hoveredType === 'fridge') return 'klik/f untuk membuka/menutup kulkas';
-    if (this.hoveredType === 'serving_table') return 'klik/f untuk menghidangkan makanan';
+    if (this.hoveredType === "faucet") return "klik/f untuk menyalakan/mematikan kran";
+    if (this.hoveredType === "window") return "klik/f untuk membuka/menutup jendela";
+    if (this.hoveredType === "stove") return "klik/f untuk menyalakan/mematikan kompor";
+    if (this.hoveredType === "fridge") return "klik/f untuk membuka/menutup kulkas";
+    if (this.hoveredType === "serving_table") return "klik/f untuk menghidangkan makanan";
     return INTERACT_PROMPT;
   }
 
   public tryInteract(): boolean {
     if (!this.hovered) return false;
-    if (this.ergonomicAssessment && this.hoveredType !== 'none' && !this.ergonomicAssessment.canInteract(this.hoveredType)) {
+    if (this.ergonomicAssessment && this.hoveredType !== "none" && !this.ergonomicAssessment.canInteract(this.hoveredType)) {
       return false;
     }
-    if (this.hoveredType === 'faucet') {
+    if (this.hoveredType === "faucet") {
       const next = this.water ? !this.water.isOpen() : !(this.hovered.userData.faucetOpen === true);
       if (this.water) this.water.setOpen(next);
       this.hovered.userData.faucetOpen = next;
       if (this.faucetRoot) this.faucetRoot.userData.faucetOpen = next;
       return true;
     }
-    if (this.hoveredType === 'window') {
+    if (this.hoveredType === "window") {
       const windowName = this.hovered.userData.windowName;
       if (windowName) {
         this.windowSystem.toggleWindow(windowName);
         return true;
       }
     }
-    if (this.hoveredType === 'fridge') {
+    if (this.hoveredType === "fridge") {
       this.fridgeInteraction?.toggleFridgeDoor();
       return true;
     }
-    if (this.hoveredType === 'stove') {
+    if (this.hoveredType === "stove") {
       this.stoveFireMinigame?.open();
       return true;
     }
-    if (this.hoveredType === 'serving_table') {
-      // Satu aksi sekali jalan: wortel rebus langsung diletakkan di piring.
+    if (this.hoveredType === "serving_table") {
       return this.servingSystem?.serve() ?? false;
     }
     return false;
@@ -238,5 +232,9 @@ export class InteractionSystem {
   public isFaucetOpen(): boolean {
     if (this.water) return this.water.isOpen();
     return this.faucetRoot ? this.faucetRoot.userData.faucetOpen === true : false;
+  }
+
+  public getRoots(): THREE.Object3D[] {
+    return this.roots;
   }
 }

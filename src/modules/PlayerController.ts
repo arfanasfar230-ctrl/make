@@ -1,15 +1,13 @@
-import * as THREE from 'three';
-import type { SceneContext, ControlInput, PlayerState } from './types';
+import * as THREE from "three";
+import type { SceneContext, ControlInput, PlayerState } from "./types";
 
 const PLAYER_HEIGHT_M = 1.8;
 const PLAYER_RADIUS_M = 0.27;
 const PLAYER_EYE_RATIO = 0.92;
 const PLAYER_SPEED_MPS = 3.5;
-/** Radians of yaw/pitch per mouse pixel at sensitivity 1. */
 const LOOK_SENSITIVITY = 0.002;
 const LOOK_SENSITIVITY_MIN = 0.2;
 const LOOK_SENSITIVITY_MAX = 5;
-/** Mobile touch sensitivity multiplier (fixed, not persisted). */
 const MOBILE_LOOK_SENSITIVITY = 1.2;
 const GRAVITY_MPS2 = -9.81;
 const MIN_PITCH = -Math.PI / 2.5;
@@ -51,11 +49,10 @@ export class PlayerController {
       isGrounded: true,
     };
 
-    // Use the shared scene camera so the rendered view follows the player.
     this.camera = ctx.camera;
 
     this.collider = new THREE.Group();
-    this.collider.name = 'player_collider';
+    this.collider.name = "player_collider";
     this.updateColliderVisual();
 
     ctx.scene.add(this.collider);
@@ -108,15 +105,20 @@ export class PlayerController {
   }
 
   update(input: ControlInput, deltaTime: number, collisionCheck: (pos: THREE.Vector3, radius: number) => THREE.Vector3): void {
-    if (!this.vrMode) {
+    if (this.vrMode) {
+      const headDir = new THREE.Vector3();
+      this.camera.getWorldDirection(headDir);
+      headDir.y = 0;
+      headDir.normalize();
+      this.yaw = Math.atan2(-headDir.x, -headDir.z);
+      this.state.yaw = this.yaw;
+    } else {
       const sensitivity = this.isMobileMode
         ? this.mobileLookSensitivity
         : this.lookSensitivity;
       this.yaw -= input.lookX * LOOK_SENSITIVITY * sensitivity;
       this.pitch -= input.lookY * LOOK_SENSITIVITY * sensitivity;
       this.pitch = THREE.MathUtils.clamp(this.pitch, MIN_PITCH, MAX_PITCH);
-      // Keep yaw bounded so free 360-degree turning never overflows to huge
-      // numbers. The movement math below treats all yaw values the same.
       this.yaw = THREE.MathUtils.euclideanModulo(this.yaw + Math.PI, Math.PI * 2) - Math.PI;
       this.state.yaw = this.yaw;
     }
@@ -231,7 +233,6 @@ export class PlayerController {
     ).normalize();
   }
 
-  /** Camera look mouse/touch sensitivity multiplier (clamped, default 1). */
   public setLookSensitivity(value: number): void {
     this.lookSensitivity = THREE.MathUtils.clamp(value, LOOK_SENSITIVITY_MIN, LOOK_SENSITIVITY_MAX);
   }
@@ -240,12 +241,10 @@ export class PlayerController {
     return this.lookSensitivity;
   }
 
-  /** Enable/disable mobile mode for touch-specific sensitivity. */
   public setMobileMode(enabled: boolean): void {
     this.isMobileMode = enabled;
   }
 
-  /** Mobile touch sensitivity multiplier (clamped, default 0.75). Not persisted. */
   public setMobileLookSensitivity(value: number): void {
     this.mobileLookSensitivity = THREE.MathUtils.clamp(value, 0.1, 3);
   }

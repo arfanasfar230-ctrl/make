@@ -555,7 +555,8 @@ kitchenModel: null,
             this.scene,
             this.camera,
             this.player,
-            vrBtn
+            vrBtn,
+            this.interaction
           );
         } catch (err) {
           console.warn('VR tidak tersedia:', err);
@@ -1540,9 +1541,36 @@ kitchenModel: null,
       }
     } else if (this.currentMode === 'vr' && this.vrSystem) {
       if (this.vrSystem.isInVR()) {
+        const frame = this.renderer.xr.getFrame();
+        this.vrSystem.setFrame(frame);
+        this.vrSystem.updateControllers();
         input = this.vrSystem.getInput();
+
+        const vrHover = this.vrSystem.getHoverTarget();
+        const vrHoverType = this.vrSystem.getHoverType();
+        if (vrHover && vrHoverType && vrHoverType !== 'none') {
+          const label = this.vrSystem.getHoverLabel();
+          if (label) {
+            this.promptText.textContent = label;
+            this.interactionPrompt.style.display = 'block';
+          }
+          if (input.interact) {
+            const wasFaucetOpen = vrHoverType === 'faucet' && this.interaction.isFaucetOpen();
+            this.vrSystem.tryInteract();
+            if (vrHoverType === 'faucet') {
+              const isFaucetOpen = this.interaction.isFaucetOpen();
+              this.ergonomicAssessment?.setFaucetState(isFaucetOpen);
+              if (!wasFaucetOpen && isFaucetOpen) {
+                this.scheduleCarrotCleanPrompt();
+              }
+            }
+          }
+        } else {
+          this.interactionPrompt.style.display = 'none';
+        }
       } else {
         input = { moveForward: 0, moveRight: 0, lookX: 0, lookY: 0, interact: false };
+        this.interactionPrompt.style.display = 'none';
       }
     } else {
       input = { moveForward: 0, moveRight: 0, lookX: 0, lookY: 0, interact: false };
@@ -1638,3 +1666,11 @@ kitchenModel: null,
 window.addEventListener('DOMContentLoaded', () => {
   new KitchenErgonomicsApp();
 });
+
+
+
+
+
+
+
+
