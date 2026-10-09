@@ -167,7 +167,22 @@ export class PlayerController {
 
     this.collider.position.copy(this.state.position);
 
-    if (!this.vrMode) {
+    if (this.vrMode) {
+      // WebXR poses are expressed in real-world metres.  The kitchen model is
+      // scaled into its own world units, so the WebXR camera must live at the
+      // player's feet and inherit the same scale as the model.
+      this.syncVRCameraRig();
+    } else {
+      this.syncCamera();
+    }
+  }
+
+  public setVRMode(enabled: boolean): void {
+    this.vrMode = enabled;
+    if (enabled) {
+      this.syncVRCameraRig();
+    } else {
+      this.camera.scale.setScalar(1);
       this.syncCamera();
     }
   }
@@ -196,6 +211,18 @@ export class PlayerController {
       this.ctx.floorY + 0.2,
       this.ctx.sceneBoundingBox.max.y - 0.1
     );
+  }
+
+  /**
+   * The Three.js WebXR camera applies the headset pose below this camera's
+   * world transform.  Keep that transform at the player's floor position;
+   * WebXR then supplies the physical head height and movement in metres.
+   */
+  private syncVRCameraRig(): void {
+    this.camera.position.copy(this.state.position);
+    this.camera.quaternion.identity();
+    this.camera.scale.setScalar(this.ctx.sceneScale);
+    this.camera.updateMatrixWorld();
   }
 
   public spawn(spawnPos: THREE.Vector3): void {

@@ -101,7 +101,7 @@ export class VRSystem {
       this.renderer.xr.enabled = true;
       await this.renderer.xr.setSession(session);
 
-      this.player.vrMode = true;
+      this.player.setVRMode(true);
 
       this.referenceSpace = await session.requestReferenceSpace("local-floor");
 
@@ -148,7 +148,7 @@ export class VRSystem {
   private onSessionEnd(): void {
     this.xrSession = null;
     this.referenceSpace = null;
-    this.player.vrMode = false;
+    this.player.setVRMode(false);
     this.controllers = [];
     this.laserLine.visible = false;
     this.laserDot.visible = false;
@@ -174,7 +174,7 @@ export class VRSystem {
       const pose = this.frame.getPose(controller.inputSource.gripSpace!, this.referenceSpace);
       if (pose) {
         const transform = pose.transform;
-        controller.grip.position.set(transform.position.x, transform.position.y, transform.position.z);
+        controller.grip.position.copy(this.xrPositionToWorld(transform.position));
         controller.grip.quaternion.set(transform.orientation.x, transform.orientation.y, transform.orientation.z, transform.orientation.w);
         controller.grip.visible = true;
       } else {
@@ -210,12 +210,14 @@ export class VRSystem {
     }
 
     const transform = pose.transform;
-    const origin = new THREE.Vector3(transform.position.x, transform.position.y, transform.position.z);
+    const origin = this.xrPositionToWorld(transform.position);
+    this.laserDot.scale.setScalar(this.playerScale);
     const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(
       new THREE.Quaternion(transform.orientation.x, transform.orientation.y, transform.orientation.z, transform.orientation.w)
     );
 
     this.laserRaycaster.set(origin, direction);
+    this.laserRaycaster.far = this.laserMaxDistance * this.playerScale;
 
     const hits = this.laserRaycaster.intersectObjects(this.interactionSystem.getRoots(), true);
     let hitPoint: THREE.Vector3 | null = null;
@@ -245,7 +247,7 @@ export class VRSystem {
         this.lastHoveredObject = hitObject;
       }
     } else {
-      const endPoint = origin.clone().add(direction.clone().multiplyScalar(this.laserMaxDistance));
+      const endPoint = origin.clone().add(direction.clone().multiplyScalar(this.laserMaxDistance * this.playerScale));
       const positions = this.laserLine.geometry.attributes.position.array as Float32Array;
       positions[0] = origin.x; positions[1] = origin.y; positions[2] = origin.z;
       positions[3] = endPoint.x; positions[4] = endPoint.y; positions[5] = endPoint.z;
@@ -261,6 +263,23 @@ export class VRSystem {
       this.interactionSystem.setHovered(null);
       this.lastHoveredObject = null;
     }
+  }
+
+  /** Convert an XR pose (metres from the local-floor origin) into scene units. */
+  private xrPositionToWorld(position: DOMPointReadOnly): THREE.Vector3 {
+    const scale = this.playerScale;
+    const playerPos = this.player.getPosition();
+    return new THREE.Vector3(
+      playerPos.x + position.x * scale,
+      playerPos.y + position.y * scale,
+      playerPos.z + position.z * scale
+    );
+  }
+
+  private get playerScale(): number {
+    // The player's height is 1.8 m, matching the real-world XR coordinate
+    // system, so it is a stable way to recover the kitchen's world scale.
+    return this.player.getHeight() / 1.8;
   }
 
   public getInput(): ControlInput {
