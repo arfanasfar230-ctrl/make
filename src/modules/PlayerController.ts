@@ -28,6 +28,10 @@ export class PlayerController {
   private lookSensitivity: number = 1;
   private mobileLookSensitivity: number = MOBILE_LOOK_SENSITIVITY;
   private isMobileMode: boolean = false;
+  /** World-space eye level to hold while in VR; null preserves floor-relative VR. */
+  private vrEyeLevel: number | null = null;
+  /** Latest physical headset height reported by the local-floor reference space. */
+  private vrHeadHeightM: number = PLAYER_HEIGHT_M * PLAYER_EYE_RATIO;
 
   constructor(ctx: SceneContext, spawnPosition?: THREE.Vector3) {
     this.ctx = ctx;
@@ -187,6 +191,17 @@ export class PlayerController {
     }
   }
 
+  /** Lock the VR view to a world-space height (used to align it with the fridge). */
+  public setVREyeLevel(worldY: number | null): void {
+    this.vrEyeLevel = worldY;
+  }
+
+  public setVRHeadHeightMeters(height: number): void {
+    if (Number.isFinite(height) && height >= 0) {
+      this.vrHeadHeightM = height;
+    }
+  }
+
   private getFloorHeight(pos: THREE.Vector3): number {
     return this.ctx.floorY;
   }
@@ -220,6 +235,12 @@ export class PlayerController {
    */
   private syncVRCameraRig(): void {
     this.camera.position.copy(this.state.position);
+    if (this.vrEyeLevel !== null) {
+      // The WebXR viewer pose adds the physical headset height after this
+      // transform. Offset the rig so the final view remains on the requested
+      // scene height regardless of the user's calibrated height.
+      this.camera.position.y = this.vrEyeLevel - this.vrHeadHeightM * this.ctx.sceneScale;
+    }
     this.camera.quaternion.identity();
     this.camera.scale.setScalar(this.ctx.sceneScale);
     this.camera.updateMatrixWorld();

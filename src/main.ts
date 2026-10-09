@@ -548,6 +548,7 @@ kitchenModel: null,
         this.mobileControls?.dispose();
         this.mobileControls = null;
         this.player.setMobileMode(false);
+        this.spawnVRPlayerAtRoomCenter();
         const vrBtn = document.getElementById('btn-vr-enter')!;
         try {
           this.vrSystem = new VRSystem(
@@ -589,6 +590,23 @@ kitchenModel: null,
       this.mobileControls?.dispose();
       this.mobileControls = null;
     }
+  }
+
+  /**
+   * VR starts at the room centre, with the view aligned to the upper edge of
+   * the refrigerator door. The fridge is normalized to 1.8 m on load, so it
+   * is a stable visual height reference for the kitchen.
+   */
+  private spawnVRPlayerAtRoomCenter(): void {
+    const roomCenter = new THREE.Vector3();
+    this.ctx.sceneBoundingBox.getCenter(roomCenter);
+    roomCenter.y = this.ctx.floorY;
+    this.player.spawn(roomCenter);
+
+    const fridge = this.ctx.interactiveObjects.find((object) => object.category === 'fridge');
+    const eyeLevel = fridge?.boundingBox.max.y
+      ?? this.ctx.floorY + this.player.getHeight();
+    this.player.setVREyeLevel(eyeLevel);
   }
 
   private withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {

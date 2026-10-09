@@ -170,6 +170,11 @@ export class VRSystem {
   public updateControllers(): void {
     if (!this.xrSession || !this.referenceSpace || !this.frame) return;
 
+    const viewerPose = this.frame.getViewerPose(this.referenceSpace);
+    if (viewerPose) {
+      this.player.setVRHeadHeightMeters(viewerPose.transform.position.y);
+    }
+
     for (const controller of this.controllers) {
       const pose = this.frame.getPose(controller.inputSource.gripSpace!, this.referenceSpace);
       if (pose) {
